@@ -14,8 +14,9 @@ export async function installChampion(
 ): Promise<Reign> {
   const maxAttempts = 5;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    let reign: Reign;
     try {
-      const reign = await db.transaction(
+      reign = await db.transaction(
         async (tx) => {
           const [current] = await tx
             .select()
@@ -37,9 +38,6 @@ export async function installChampion(
         },
         { isolationLevel: "serializable" },
       );
-
-      onInstalled?.(occupantId);
-      return reign;
     } catch (err: any) {
       if (err?.code === SERIALIZATION_FAILURE && attempt < maxAttempts) {
         onRetry?.();
@@ -47,6 +45,15 @@ export async function installChampion(
       }
       throw err;
     }
+
+    // Deliberately outside the try/catch above: the transaction has already
+    // committed at this point, so a throwing onInstalled must not be caught
+    // and mistaken for a serialization conflict (which would re-run the
+    // transaction and install a second, duplicate champion on top of the one
+    // that already committed) and must not be swallowed into a false failure
+    // report for an install that in fact succeeded.
+    onInstalled?.(occupantId);
+    return reign;
   }
   throw new Error("installChampion: exceeded retry attempts under serialization conflict");
 }

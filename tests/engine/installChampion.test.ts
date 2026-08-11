@@ -77,4 +77,37 @@ describe("installChampion", () => {
     expect([a.id, b.id]).toContain(active[0].id);
     expect(retryCount).toBeGreaterThanOrEqual(1);
   });
+
+  it("propagates a throwing onInstalled without retrying or double-installing, even when the error looks like a serialization conflict", async () => {
+    await createInitialReign("first", new Date(2026, 0, 1));
+    const now = new Date(2026, 0, 2);
+
+    let onInstalledCalls = 0;
+    let onRetryCalls = 0;
+    const boom = Object.assign(new Error("event bus is down"), { code: "40001" });
+
+    await expect(
+      installChampion(
+        "second",
+        11_000,
+        now,
+        () => {
+          onInstalledCalls += 1;
+          throw boom;
+        },
+        { onRetry: () => (onRetryCalls += 1) },
+      ),
+    ).rejects.toBe(boom);
+
+    // The install itself must have committed exactly once: onInstalled only
+    // ever runs after the transaction commits, so a single call proves a
+    // single successful install, and zero retries proves the throw wasn't
+    // mistaken for a real SQLSTATE 40001 from the transaction itself.
+    expect(onInstalledCalls).toBe(1);
+    expect(onRetryCalls).toBe(0);
+
+    const active = await db.select().from(reigns).where(isNull(reigns.endedAt));
+    expect(active.length).toBe(1);
+    expect(active[0].occupantId).toBe("second");
+  });
 });
