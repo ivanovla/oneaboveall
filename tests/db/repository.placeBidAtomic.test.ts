@@ -14,9 +14,9 @@ afterAll(async () => {
   await pool.end();
 });
 
-async function seedRound(priceCents: number) {
+async function seedRound(priceCents: number, phase: "bidding" | "payment" | "closed" = "bidding") {
   const [reign] = await db.insert(reigns).values({ occupantId: "champ", priceCents, startedAt: new Date() }).returning();
-  const [round] = await db.insert(rounds).values({ reignId: reign.id, startsAt: new Date() }).returning();
+  const [round] = await db.insert(rounds).values({ reignId: reign.id, startsAt: new Date(), phase }).returning();
   return round.id;
 }
 
@@ -47,7 +47,29 @@ describe("placeBidAtomic", () => {
     expect(second.ok).toBe(true);
   });
 
-  it("only lets one of two simultaneous equal-tier bids win the leader slot", async () => {
+  it("rejects a bid against a round that has moved past the bidding phase", async () => {
+    const paymentRoundId = await seedRound(10_000, "payment");
+    const paymentResult = await placeBidAtomic({
+      roundId: paymentRoundId,
+      bidderId: "a",
+      amountCents: 10_100,
+      depositCents: 1_010,
+      depositRef: "d1",
+    });
+    expect(paymentResult.ok).toBe(false);
+
+    const closedRoundId = await seedRound(10_000, "closed");
+    const closedResult = await placeBidAtomic({
+      roundId: closedRoundId,
+      bidderId: "a",
+      amountCents: 10_100,
+      depositCents: 1_010,
+      depositRef: "d2",
+    });
+    expect(closedResult.ok).toBe(false);
+  });
+
+  it("only lets one of two simultaneous equal-tier bids win the leader slot, via a genuine SERIALIZABLE conflict", async () => {
     const roundId = await seedRound(10_000);
     // Pre-warm two pool connections in parallel first. Without this, the second
     // placeBidAtomic call below can pay a cold `pool.connect()` penalty that lets
@@ -58,11 +80,28 @@ describe("placeBidAtomic", () => {
     // overlap, so this test exercises the real conflict-and-retry path.
     await Promise.all([db.execute(sql`select 1`), db.execute(sql`select 1`)]);
 
+    // `okCount === 1` alone is satisfied both by a genuine SERIALIZABLE conflict
+    // (one transaction aborted with 40001 and correctly retried-and-rejected) and
+    // by the two calls running accidentally sequentially (no conflict at all,
+    // second call just sees the first's committed row via ordinary validation).
+    // Those two outcomes are indistinguishable from `okCount` alone, which is
+    // exactly how the pre-warm fix above stayed silently unverified. To make the
+    // mechanism itself assertable, count retries via `onRetry` — this only fires
+    // when the loop catches SQLSTATE 40001 — and require at least one to have
+    // happened. If someone drops `isolationLevel: "serializable"` or the pool
+    // stops overlapping the two transactions, this assertion fails even though
+    // `okCount` would still happen to be 1.
+    let retryCount = 0;
+    const onRetry = () => {
+      retryCount += 1;
+    };
+
     const [r1, r2] = await Promise.all([
-      placeBidAtomic({ roundId, bidderId: "a", amountCents: 10_100, depositCents: 1_010, depositRef: "d1" }),
-      placeBidAtomic({ roundId, bidderId: "b", amountCents: 10_100, depositCents: 1_010, depositRef: "d2" }),
+      placeBidAtomic({ roundId, bidderId: "a", amountCents: 10_100, depositCents: 1_010, depositRef: "d1", onRetry }),
+      placeBidAtomic({ roundId, bidderId: "b", amountCents: 10_100, depositCents: 1_010, depositRef: "d2", onRetry }),
     ]);
     const okCount = [r1, r2].filter((r) => r.ok).length;
     expect(okCount).toBe(1);
+    expect(retryCount).toBeGreaterThanOrEqual(1);
   });
 });

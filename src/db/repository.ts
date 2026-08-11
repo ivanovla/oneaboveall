@@ -49,6 +49,7 @@ export async function placeBidAtomic(params: {
   amountCents: number;
   depositCents: number;
   depositRef: string;
+  onRetry?: () => void;
 }): Promise<{ ok: true; bid: Bid } | { ok: false; reason: string }> {
   const maxAttempts = 5;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -57,6 +58,7 @@ export async function placeBidAtomic(params: {
         async (tx) => {
           const [round] = await tx.select().from(rounds).where(eq(rounds.id, params.roundId)).limit(1);
           if (!round) return { ok: false, reason: "Round not found." };
+          if (round.phase !== "bidding") return { ok: false, reason: "Round is not accepting bids." };
 
           const [reign] = await tx.select().from(reigns).where(eq(reigns.id, round.reignId)).limit(1);
           if (!reign) return { ok: false, reason: "Reign not found." };
@@ -89,7 +91,10 @@ export async function placeBidAtomic(params: {
         { isolationLevel: "serializable" },
       );
     } catch (err: any) {
-      if (err?.code === SERIALIZATION_FAILURE && attempt < maxAttempts) continue;
+      if (err?.code === SERIALIZATION_FAILURE && attempt < maxAttempts) {
+        params.onRetry?.();
+        continue;
+      }
       throw err;
     }
   }
