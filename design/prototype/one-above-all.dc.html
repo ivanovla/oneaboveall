@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500;600&family=Manrope:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --void:#070603; --fg:#f0e7d6; --fg-dim:rgba(240,231,214,.56); --fg-faint:rgba(240,231,214,.3);
+    --gold:#c9a45c; --gold-soft:rgba(201,164,92,.34);
+    --panel:rgba(14,11,7,.86); --panel-2:rgba(255,250,240,.045);
+    --line:rgba(201,164,92,.22); --scrim:rgba(5,4,2,.72);
+    --btn-fg:#100c06; --shade:0;
+    --on-scene:#f4ecdd; --on-scene-dim:rgba(244,236,221,.6); --on-scene-faint:rgba(244,236,221,.42);
+    --scene-chip:rgba(12,9,5,.62);
+  }
+  [data-theme="light"]{
+    --void:#e9e2d5; --fg:#171310; --fg-dim:rgba(23,19,16,.62); --fg-faint:rgba(23,19,16,.34);
+    --gold:#7d5c22; --gold-soft:rgba(125,92,34,.3);
+    --panel:rgba(250,246,238,.9); --panel-2:rgba(23,19,16,.05);
+    --line:rgba(125,92,34,.24); --scrim:rgba(238,232,221,.7);
+    --btn-fg:#faf6ee; --shade:1;
+  }
+  *{box-sizing:border-box;-webkit-font-smoothing:antialiased}
+  html,body{margin:0;padding:0;background:#070603;font-family:Manrope,Helvetica,Arial,sans-serif}
+  a{color:var(--gold);text-decoration:none}
+  a:hover{color:var(--fg)}
+  button{font-family:inherit;cursor:pointer;border:0;background:none;color:inherit}
+  input{font-family:inherit}
+  @keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+  @keyframes fade{from{opacity:0}to{opacity:1}}
+  @keyframes breathe{0%,100%{opacity:.5}50%{opacity:1}}
+</style>
+</helmet>
+
+<div data-theme="{{ theme }}" style="position:fixed;inset:0;overflow:hidden;background:var(--void);color:var(--fg)">
+
+  <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:100vw;aspect-ratio:16/9;min-height:56.25vw">
+    <img src="scene.png" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;opacity:1">
+    <div style="position:absolute;inset:0;background:radial-gradient(120% 90% at 50% 22%, rgba(0,0,0,0) 30%, rgba(4,3,1,.55) 100%);pointer-events:none"></div>
+    <div style="position:absolute;inset:0;background:var(--void);opacity:calc(var(--shade) * .46);mix-blend-mode:screen;pointer-events:none"></div>
+
+    <sc-for list="{{ people }}" as="p" hint-placeholder-count="9">
+      <div style="position:absolute;left:{{ p.leftPct }};top:{{ p.topPct }};transform:translate(-50%,-50%)" onMouseEnter="{{ p.enter }}" onMouseLeave="{{ p.leave }}" onClick="{{ p.enter }}">
+        <button aria-label="{{ p.name }}" style="width:5.4vw;height:5.4vw;min-width:44px;min-height:44px;border-radius:50%;border:1px solid transparent;transition:border-color .25s, box-shadow .25s" style-hover="border-color:var(--gold-soft);box-shadow:0 0 34px rgba(201,164,92,.18) inset"></button>
+      </div>
+    </sc-for>
+
+    <sc-for list="{{ tips }}" as="t" hint-placeholder-count="0">
+      <div style="position:absolute;transform:translate(-50%,0);width:min(72vw,264px);padding:14px 16px 15px;background:var(--panel);border:1px solid var(--line);backdrop-filter:blur(14px);box-shadow:0 24px 60px rgba(0,0,0,.5);animation:fade .18s ease both;z-index:5;pointer-events:none;left:{{ t.leftPct }};top:{{ t.topPct }}">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px">
+          <div style="font-family:'Cormorant Garamond',Georgia,serif;font-size:21px;line-height:1.1">{{ t.name }}</div>
+          <div style="font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--gold)">{{ t.rank }}</div>
+        </div>
+        <div style="margin-top:8px;font-size:12px;line-height:1.5;color:var(--fg-dim)">{{ t.period }}</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;padding-top:11px;border-top:1px solid var(--line)">
+          <div>
+            <div style="font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--fg-faint)">Held</div>
+            <div style="font-size:13px;margin-top:3px">{{ t.held }}</div>
+          </div>
+          <div>
+            <div style="font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--fg-faint)">Paid</div>
+            <div style="font-size:13px;margin-top:3px">{{ t.paid }}</div>
+          </div>
+        </div>
+        <a href="{{ t.link }}" target="_blank" rel="noopener" style="display:block;margin-top:12px;padding-top:11px;border-top:1px solid var(--line);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--gold);pointer-events:auto">{{ t.linkLabel }} →</a>
+      </div>
+    </sc-for>
+  </div>
+
+  <div style="position:absolute;top:22px;right:24px;display:flex;gap:6px;align-items:center;z-index:20">
+    <button onClick="{{ toggleTheme }}" style="padding:8px 13px;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--on-scene-dim);border:1px solid var(--line);background:var(--scene-chip);backdrop-filter:blur(8px)" style-hover="color:var(--on-scene)">{{ themeLabel }}</button>
+    <button onClick="{{ openTop }}" style="padding:8px 13px;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--on-scene-dim);border:1px solid var(--line);background:var(--scene-chip);backdrop-filter:blur(8px)" style-hover="color:var(--on-scene)">Leaderboard</button>
+  </div>
+
+  <div style="position:absolute;left:0;right:0;bottom:0;padding:150px 20px 34px;display:flex;flex-direction:column;align-items:center;gap:18px;z-index:15;color:var(--on-scene);background:linear-gradient(to top, rgba(6,5,2,.86) 0%, rgba(6,5,2,.66) 42%, rgba(6,5,2,0) 100%)">
+    <div style="display:flex;flex-direction:column;align-items:center;gap:7px">
+      <div style="font-size:9px;letter-spacing:.32em;text-transform:uppercase;color:var(--on-scene-faint)">Current price of the seat</div>
+      <div style="font-family:'Cormorant Garamond',Georgia,serif;font-size:clamp(46px,7vw,88px);line-height:.92;letter-spacing:-.02em">{{ price }}</div>
+    </div>
+    <button onClick="{{ displace }}" style="padding:19px 58px;background:var(--gold);color:var(--btn-fg);font-size:13px;font-weight:600;letter-spacing:.42em;text-transform:uppercase;box-shadow:0 18px 48px rgba(201,164,92,.22);transition:transform .2s, box-shadow .2s" style-hover="transform:translateY(-2px);box-shadow:0 24px 60px rgba(201,164,92,.34)" style-active="transform:translateY(0)">Displace</button>
+    <div style="display:flex;align-items:center;gap:11px;font-size:12px;color:var(--on-scene-dim)">
+      <span style="width:5px;height:5px;border-radius:50%;background:#c9a45c;animation:breathe 2.4s infinite"></span>
+      <span>Bidding window closes in</span>
+      <span style="font-variant-numeric:tabular-nums;font-weight:600;color:var(--on-scene);letter-spacing:.06em">{{ clock }}</span>
+    </div>
+  </div>
+
+  <sc-if value="{{ overlay }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;padding:20px;background:var(--scrim);backdrop-filter:blur(18px);overflow:auto">
+      <div style="width:100%;max-width:472px;background:var(--panel);border:1px solid var(--line);box-shadow:0 40px 120px rgba(0,0,0,.6);animation:rise .28s ease both">
+
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--line)">
+          <div style="font-size:9px;letter-spacing:.28em;text-transform:uppercase;color:var(--gold)">{{ stepLabel }}</div>
+          <button onClick="{{ close }}" style="font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--fg-faint)" style-hover="color:var(--fg)">Close</button>
+        </div>
+
+        <div style="padding:28px 26px 30px">
+
+          <sc-if value="{{ isAuth }}" hint-placeholder-val="{{ false }}">
+            <div>
+              <div style="font-family:'Cormorant Garamond',Georgia,serif;font-size:34px;line-height:1.08">Sign in to claim the seat</div>
+              <div style="margin-top:10px;font-size:13px;line-height:1.6;color:var(--fg-dim)">One account, one bid per round.</div>
+              <div style="display:flex;flex-direction:column;gap:9px;margin-top:24px">
+                <button onClick="{{ signIn }}" style="display:flex;align-items:center;justify-content:center;gap:10px;padding:16px;border:1px solid var(--line);background:var(--panel-2);font-size:13px;letter-spacing:.04em" style-hover="border-color:var(--gold-soft)">Continue with Google</button>
+                <button onClick="{{ signIn }}" style="display:flex;align-items:center;justify-content:center;gap:10px;padding:16px;border:1px solid var(--line);background:var(--panel-2);font-size:13px;letter-spacing:.04em" style-hover="border-color:var(--gold-soft)">Continue with Apple</button>
+              </div>
+              <div style="margin-top:18px;font-size:11px;line-height:1.6;color:var(--fg-faint)">Terms of participation and deposit rules are on the rules page.</div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ isBid }}" hint-placeholder-val="{{ false }}">
+            <div>
+              <div style="font-family:'Cormorant Garamond',Georgia,serif;font-size:34px;line-height:1.08">Your bid</div>
+              <div style="display:flex;gap:14px;margin-top:22px">
+                <div style="flex:1;padding:15px 16px;border:1px solid var(--line);background:var(--panel-2)">
+                  <div style="font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--fg-faint)">Must beat</div>
+                  <div style="font-family:'Cormorant Garamond',Georgia,serif;font-size:28px;margin-top:5px">{{ price }}</div>
+                </div>
+                <div style="flex:1;padding:15px 16px;border:1px solid var(--line);background:var(--panel-2)">
+                  <div style="font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--fg-faint)">Minimum</div>
+                  <div style="font-family:'Cormorant Garamond',Georgia,serif;font-size:28px;margin-top:5px">{{ minBid }}</div>
+                </div>
+              </div>
+              <div style="margin-top:20px">
+                <div style="font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--fg-faint)">Your bid, $</div>
+                <input type="text" value="{{ bidValue }}" onChange="{{ onBid }}" style="width:100%;margin-top:8px;padding:16px 18px;background:transparent;border:1px solid var(--gold-soft);color:var(--fg);font-family:'Cormorant Garamond',Georgia,serif;font-size:34px;letter-spacing:.01em;outline:none">
+              </div>
+              <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-top:20px;padding:16px 18px;border:1px solid var(--line);background:var(--panel-2)">
+                <div>
+                  <div style="font-size:13px">Deposit charged now</div>
+                  <div style="margin-top:4px;font-size:11px;color:var(--fg-dim)">10% of the bid, capped at $1,000</div>
+                </div>
+                <div style="font-family:'Cormorant Garamond',Georgia,serif;font-size:30px;white-space:nowrap">{{ deposit }}</div>
+              </div>
+              <div style="margin-top:20px">
+                <div style="font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--fg-faint)">Deposit payment method</div>
+                <div style="display:flex;gap:9px;margin-top:9px">
+                  <button onClick="{{ pickRu }}" style="flex:1;padding:14px;font-size:12px;border:1px solid var(--line);background:{{ ruBg }};color:{{ ruFg }};border-color:{{ ruBd }}" style-hover="border-color:var(--gold-soft)">YooKassa · RU</button>
+                  <button onClick="{{ pickIntl }}" style="flex:1;padding:14px;font-size:12px;border:1px solid var(--line);background:{{ intlBg }};color:{{ intlFg }};border-color:{{ intlBd }}" style-hover="border-color:var(--gold-soft)">Stripe · Intl</button>
+                </div>
+                <div style="margin-top:9px;font-size:11px;color:var(--fg-faint)">{{ geoNote }}</div>
+              </div>
+              <button onClick="{{ placeBid }}" style="width:100%;margin-top:24px;padding:18px;background:var(--gold);color:var(--btn-fg);font-size:12px;font-weight:600;letter-spacing:.34em;text-transform:uppercase">Place deposit</button>
+              <div style="margin-top:14px;text-align:center;font-size:12px;color:var(--fg-dim)">Bidding window: <span style="color:var(--fg);font-variant-numeric:tabular-nums">{{ clock }}</span></div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ isLead }}" hint-placeholder-val="{{ false }}">
+            <div>
+              <div style="font-size:9px;letter-spacing:.28em;text-transform:uppercase;color:var(--gold)">You're first in line</div>
+              <div style="font-family:'Cormorant Garamond',Georgia,serif;font-size:36px;line-height:1.06;margin-top:12px">Bid {{ bidPretty }} accepted</div>
+              <div style="margin-top:12px;font-size:13px;line-height:1.65;color:var(--fg-dim)">The seat is yours if no one outbids you before the window closes. Queue snapshot at {{ snapshotAt }}.</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:22px">
+                <div style="padding:15px 16px;border:1px solid var(--line);background:var(--panel-2)">
+                  <div style="font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--fg-faint)">Deposit held</div>
+                  <div style="font-family:'Cormorant Garamond',Georgia,serif;font-size:26px;margin-top:5px">{{ deposit }}</div>
+                </div>
+                <div style="padding:15px 16px;border:1px solid var(--line);background:var(--panel-2)">
+                  <div style="font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--fg-faint)">Until snapshot</div>
+                  <div style="font-family:'Cormorant Garamond',Georgia,serif;font-size:26px;margin-top:5px;font-variant-numeric:tabular-nums">{{ clock }}</div>
+                </div>
+              </div>
+              <button onClick="{{ toPay }}" style="width:100%;margin-top:22px;padding:16px;border:1px solid var(--gold-soft);font-size:12px;letter-spacing:.28em;text-transform:uppercase;color:var(--gold)" style-hover="background:var(--panel-2)">Round closed — continue</button>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ isPay }}" hint-placeholder-val="{{ false }}">
+            <div>
+              <div style="font-size:9px;letter-spacing:.28em;text-transform:uppercase;color:var(--gold)">You won the round</div>
+              <div style="font-family:'Cormorant Garamond',Georgia,serif;font-size:36px;line-height:1.06;margin-top:12px">Remaining balance due</div>
+              <div style="margin-top:26px;text-align:center">
+                <div style="font-family:'Cormorant Garamond',Georgia,serif;font-size:64px;line-height:1;letter-spacing:-.02em">{{ remainder }}</div>
+                <div style="margin-top:8px;font-size:12px;color:var(--fg-dim)">Bid {{ bidPretty }} minus deposit {{ deposit }}</div>
+              </div>
+              <div style="margin-top:26px;padding:20px;border:1px solid var(--gold-soft);text-align:center;background:var(--panel-2)">
+                <div style="font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--fg-faint)">Payment window closes in</div>
+                <div style="font-family:'Cormorant Garamond',Georgia,serif;font-size:52px;line-height:1.05;margin-top:6px;font-variant-numeric:tabular-nums;color:var(--gold)">{{ payClock }}</div>
+              </div>
+              <button onClick="{{ toUpload }}" style="width:100%;margin-top:22px;padding:18px;background:var(--gold);color:var(--btn-fg);font-size:12px;font-weight:600;letter-spacing:.34em;text-transform:uppercase">Pay {{ remainder }}</button>
+              <div style="margin-top:13px;text-align:center;font-size:11px;color:var(--fg-faint)">{{ payProvider }}</div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ isUpload }}" hint-placeholder-val="{{ false }}">
+            <div>
+              <div style="font-size:9px;letter-spacing:.28em;text-transform:uppercase;color:var(--gold)">Paid</div>
+              <div style="font-family:'Cormorant Garamond',Georgia,serif;font-size:36px;line-height:1.06;margin-top:12px">Send your face</div>
+              <div style="margin-top:11px;font-size:13px;line-height:1.65;color:var(--fg-dim)">Front-facing photo, full face, no glasses or headwear.</div>
+              <div style="margin-top:22px;aspect-ratio:4/3;border:1px dashed var(--gold-soft);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;background:var(--panel-2)">
+                <div style="font-family:ui-monospace,Menlo,monospace;font-size:11px;letter-spacing:.12em;color:var(--fg-faint)">selfie · jpg / png · up to 12 MB</div>
+                <button style="padding:12px 26px;border:1px solid var(--gold-soft);font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--gold)" style-hover="background:var(--panel-2)">Choose file</button>
+              </div>
+              <button onClick="{{ toggleConsent }}" style="display:flex;gap:12px;align-items:flex-start;text-align:left;margin-top:20px;padding:14px 15px;border:1px solid var(--line);width:100%;background:var(--panel-2)">
+                <span style="flex:0 0 18px;width:18px;height:18px;border:1px solid var(--gold);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--btn-fg);background:{{ consentBg }}">{{ consentMark }}</span>
+                <span style="font-size:12px;line-height:1.55;color:var(--fg-dim)">I agree to have my photo published on the homepage and in the champions archive.</span>
+              </button>
+              <button onClick="{{ toPending }}" style="width:100%;margin-top:20px;padding:18px;background:var(--gold);color:var(--btn-fg);font-size:12px;font-weight:600;letter-spacing:.34em;text-transform:uppercase;opacity:{{ sendOpacity }};pointer-events:{{ sendEvents }}">Submit</button>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ isPending }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:24px 0 20px;text-align:center">
+              <div style="width:9px;height:9px;border-radius:50%;background:var(--gold);margin:0 auto;animation:breathe 2.2s infinite"></div>
+              <div style="font-family:'Cormorant Garamond',Georgia,serif;font-size:34px;line-height:1.1;margin-top:22px">The scene is updating</div>
+              <div style="margin-top:12px;font-size:13px;line-height:1.7;color:var(--fg-dim)">The shot is being re-composed with you at the center. Usually takes a few minutes — feel free to close this page, we'll notify you.</div>
+              <button onClick="{{ close }}" style="margin-top:26px;padding:15px 34px;border:1px solid var(--gold-soft);font-size:11px;letter-spacing:.26em;text-transform:uppercase;color:var(--gold)" style-hover="background:var(--panel-2)">Back to the scene</button>
+              <div style="margin-top:20px"><button onClick="{{ toMissed }}" style="font-size:11px;color:var(--fg-faint);text-decoration:underline">state: payment missed</button></div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ isMissed }}" hint-placeholder-val="{{ false }}">
+            <div>
+              <div style="font-size:9px;letter-spacing:.28em;text-transform:uppercase;color:var(--fg-faint)">Payment window closed</div>
+              <div style="font-family:'Cormorant Garamond',Georgia,serif;font-size:34px;line-height:1.08;margin-top:12px">The seat moved to the next in line</div>
+              <div style="margin-top:12px;font-size:13px;line-height:1.7;color:var(--fg-dim)">The remaining balance didn't arrive before the daily window closed, so the offer passed to the second in queue.</div>
+              <div style="margin-top:22px;border:1px solid var(--line)">
+                <div style="display:flex;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--line);font-size:13px"><span style="color:var(--fg-dim)">Deposit</span><span>{{ deposit }} forfeited</span></div>
+                <div style="display:flex;justify-content:space-between;padding:14px 16px;font-size:13px"><span style="color:var(--fg-dim)">Participation</span><span>3-round pause</span></div>
+              </div>
+              <div style="margin-top:16px;font-size:12px;line-height:1.6;color:var(--fg-faint)">Next eligible bid: August 14. If your payment was delayed, reach out and we'll sort it out.</div>
+              <button onClick="{{ close }}" style="width:100%;margin-top:22px;padding:16px;border:1px solid var(--line);font-size:11px;letter-spacing:.26em;text-transform:uppercase;color:var(--fg-dim)" style-hover="color:var(--fg);border-color:var(--gold-soft)">Back to the scene</button>
+            </div>
+          </sc-if>
+
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ isTop }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;inset:0;z-index:50;background:var(--scrim);backdrop-filter:blur(20px);overflow:auto">
+      <div style="max-width:760px;margin:0 auto;padding:clamp(28px,7vh,72px) 22px 80px;animation:rise .3s ease both">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px">
+          <div>
+            <div style="font-size:9px;letter-spacing:.3em;text-transform:uppercase;color:var(--gold)">Leaderboard</div>
+            <div style="font-family:'Cormorant Garamond',Georgia,serif;font-size:clamp(38px,6vw,60px);line-height:1.02;margin-top:10px">Who held the seat the longest</div>
+          </div>
+          <button onClick="{{ close }}" style="flex:0 0 auto;padding:10px 15px;border:1px solid var(--line);font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--fg-dim)" style-hover="color:var(--fg)">Close</button>
+        </div>
+        <div style="margin-top:38px;border-top:1px solid var(--line)">
+          <sc-for list="{{ board }}" as="r" hint-placeholder-count="8">
+            <div style="display:grid;grid-template-columns:38px 1fr auto auto;gap:clamp(10px,3vw,28px);align-items:center;padding:17px 4px;border-bottom:1px solid var(--line)" style-hover="background:var(--panel-2)">
+              <div style="font-family:'Cormorant Garamond',Georgia,serif;font-size:22px;color:var(--gold)">{{ r.n }}</div>
+              <div>
+                <div style="font-size:15px">{{ r.name }}</div>
+                <div style="margin-top:3px;font-size:11px;color:var(--fg-faint)">{{ r.rounds }}</div>
+              </div>
+              <div style="text-align:right;font-size:12px;color:var(--fg-dim);font-variant-numeric:tabular-nums">{{ r.spent }}</div>
+              <div style="text-align:right;min-width:74px;font-family:'Cormorant Garamond',Georgia,serif;font-size:21px;font-variant-numeric:tabular-nums">{{ r.days }}</div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="margin-top:20px;font-size:11px;color:var(--fg-faint)">Cumulative time at the head of the table. Data since March 3, 2026.</div>
+      </div>
+    </div>
+  </sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{}">
+const PEOPLE = [
+  {left:50.4, top:18.4, name:"Mark Vilensky", rank:"Champion", period:"At the head of the table since Aug 9, 2:20 PM", held:"1d 4h", paid:"$4,210", link:"https://instagram.com", linkLabel:"Instagram"},
+  {left:17.5, top:38.2, name:"Daniel Crowe", rank:"Retinue #1", period:"Held the seat on Aug 8", held:"1d", paid:"$3,980", link:"https://instagram.com", linkLabel:"Instagram"},
+  {left:28.5, top:39.8, name:"Osei Adjei", rank:"#2", period:"Held the seat on Aug 7", held:"1d", paid:"$3,640", link:"https://instagram.com", linkLabel:"Instagram"},
+  {left:72.0, top:40.0, name:"Arthur Lemeshev", rank:"#3", period:"Held the seat on Aug 6", held:"1d", paid:"$3,100", link:"https://instagram.com", linkLabel:"Instagram"},
+  {left:82.7, top:41.4, name:"Ivan Dorn", rank:"#4", period:"Held the seat on Aug 5", held:"1d", paid:"$2,870", link:"https://instagram.com", linkLabel:"Instagram"},
+  {left:20.6, top:57.6, name:"Felix Lang", rank:"#5", period:"Held the seat on Aug 4", held:"1d", paid:"$2,400", link:"https://instagram.com", linkLabel:"Instagram"},
+  {left:35.7, top:58.8, name:"Y. Kimura", rank:"#6", period:"Held the seat on Aug 3", held:"1d", paid:"$2,150", link:"https://instagram.com", linkLabel:"Instagram"},
+  {left:65.0, top:60.0, name:"Timur Aslanov", rank:"#7", period:"Held the seat on Aug 2", held:"1d", paid:"$1,980", link:"https://instagram.com", linkLabel:"Instagram"},
+  {left:79.0, top:57.6, name:"Paul Renier", rank:"#8", period:"Held the seat on Aug 1", held:"1d", paid:"$1,720", link:"https://instagram.com", linkLabel:"Instagram"}
+];
+
+const BOARD = [
+  {n:"01", name:"Mark Vilensky", rounds:"6 rounds", spent:"$18,400 total", days:"11d"},
+  {n:"02", name:"Osei Adjei", rounds:"5 rounds", spent:"$14,900", days:"7d"},
+  {n:"03", name:"Daniel Crowe", rounds:"4 rounds", spent:"$12,300", days:"5d"},
+  {n:"04", name:"Felix Lang", rounds:"3 rounds", spent:"$8,100", days:"4d"},
+  {n:"05", name:"Y. Kimura", rounds:"3 rounds", spent:"$7,450", days:"3d"},
+  {n:"06", name:"Arthur Lemeshev", rounds:"2 rounds", spent:"$6,200", days:"2d"},
+  {n:"07", name:"Timur Aslanov", rounds:"2 rounds", spent:"$5,000", days:"2d"},
+  {n:"08", name:"Paul Renier", rounds:"1 round", spent:"$1,720", days:"1d"}
+];
+
+const money = n => "$" + Math.round(n).toLocaleString("en-US");
+const pad = n => String(n).padStart(2, "0");
+
+class Component extends DCLogic {
+  state = {
+    theme: "dark", screen: "home", hover: -1,
+    current: 4210, bid: 4211, provider: "ru", consent: false,
+    left: 6 * 3600 + 41 * 60 + 12, payLeft: 3 * 3600 + 12 * 60
+  };
+
+  componentDidMount() {
+    this.t = setInterval(() => this.setState(s => ({
+      left: Math.max(0, s.left - 1),
+      payLeft: Math.max(0, s.payLeft - 1)
+    })), 1000);
+  }
+  componentWillUnmount() { clearInterval(this.t); }
+
+  fmt(sec) { return pad(Math.floor(sec / 3600)) + ":" + pad(Math.floor(sec / 60) % 60) + ":" + pad(sec % 60); }
+
+  go(screen) { return () => this.setState({ screen, hover: -1 }); }
+
+  renderVals() {
+    const s = this.state;
+    const bid = Math.max(s.current + 1, Number(String(s.bid).replace(/[^\d]/g, "")) || 0);
+    const deposit = Math.min(1000, Math.round(bid * 0.1));
+    const overlay = ["auth", "bid", "lead", "pay", "upload", "pending", "missed"].includes(s.screen);
+    const labels = {
+      auth: "Step 1 · Sign in", bid: "Step 2 · Bid", lead: "Step 3 · Queue",
+      pay: "Step 4 · Balance", upload: "Step 5 · Photo", pending: "Step 6 · Waiting", missed: "Round missed"
+    };
+    const ru = s.provider === "ru";
+
+    const people = PEOPLE.map((p, i) => ({
+      name: p.name,
+      leftPct: p.left + "%", topPct: p.top + "%",
+      enter: () => this.setState({ hover: i }),
+      leave: () => this.setState(st => ({ hover: st.hover === i ? -1 : st.hover }))
+    }));
+
+    const h = s.hover;
+    const tips = h < 0 ? [] : [Object.assign({}, PEOPLE[h], {
+      leftPct: Math.min(86, Math.max(14, PEOPLE[h].left)) + "%",
+      topPct: (PEOPLE[h].top + 5) + "%"
+    })];
+
+    return {
+      theme: s.theme, themeLabel: s.theme === "dark" ? "Light" : "Dark",
+      toggleTheme: () => this.setState({ theme: s.theme === "dark" ? "light" : "dark" }),
+      people, tips, board: BOARD,
+      price: money(s.current), minBid: money(s.current + 1),
+      bidValue: String(s.bid), bidPretty: money(bid),
+      deposit: money(deposit), remainder: money(bid - deposit),
+      clock: this.fmt(s.left), payClock: this.fmt(s.payLeft),
+      snapshotAt: "9:00 PM MSK",
+      onBid: e => this.setState({ bid: e.target.value }),
+      ruBg: ru ? "var(--gold)" : "var(--panel-2)", ruFg: ru ? "var(--btn-fg)" : "var(--fg)",
+      ruBd: ru ? "var(--gold)" : "var(--line)",
+      intlBg: ru ? "var(--panel-2)" : "var(--gold)", intlFg: ru ? "var(--fg)" : "var(--btn-fg)",
+      intlBd: ru ? "var(--line)" : "var(--gold)",
+      pickRu: () => this.setState({ provider: "ru" }),
+      pickIntl: () => this.setState({ provider: "intl" }),
+      geoNote: ru
+        ? "IP detected as Russian — YooKassa selected. You can switch manually."
+        : "Visa / Mastercard, charged in US dollars.",
+      payProvider: ru ? "YooKassa · charged in rubles at the CBR rate" : "Stripe · charged in US dollars",
+      consentMark: s.consent ? "✓" : "",
+      consentBg: s.consent ? "var(--gold)" : "transparent",
+      sendOpacity: s.consent ? "1" : "0.34",
+      sendEvents: s.consent ? "auto" : "none",
+      toggleConsent: () => this.setState({ consent: !s.consent }),
+      overlay, isTop: s.screen === "top", stepLabel: labels[s.screen] || "",
+      isAuth: s.screen === "auth", isBid: s.screen === "bid", isLead: s.screen === "lead",
+      isPay: s.screen === "pay", isUpload: s.screen === "upload",
+      isPending: s.screen === "pending", isMissed: s.screen === "missed",
+      displace: this.go("auth"), signIn: this.go("bid"), placeBid: this.go("lead"),
+      toPay: this.go("pay"), toUpload: this.go("upload"), toPending: this.go("pending"),
+      toMissed: this.go("missed"), openTop: this.go("top"), close: this.go("home")
+    };
+  }
+}
+</script>
+</body>
+</html>
