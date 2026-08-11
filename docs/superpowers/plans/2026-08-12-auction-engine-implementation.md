@@ -1407,9 +1407,11 @@ git commit -m "feat: add champion installation"
 **Interfaces:**
 - Consumes: `installChampion` (Task 11), `getQueueLeader` (Task 6), `PAYMENT_ATTEMPT_MS`/`ROUND_MS`/`BAN_DURATION_MS` (Task 2), `bids`/`bans`/`paymentOffers`/`rounds` tables, `PaymentProvider` (Task 5).
 - Produces two functions appended to `src/engine/roundResolution.ts`:
-  - `confirmPayment(offerId: string, now: Date, provider: PaymentProvider, onInstalled?: (occupantId: string) => void): Promise<{ outcome: "paid" }>`
+  - `confirmPayment(offerId: string, now: Date, provider: PaymentProvider, onInstalled?: (occupantId: string) => void): Promise<{ outcome: "paid" | "already-processed" }>`
   - `resolveExpiredOffer(offerId: string, now: Date, provider: PaymentProvider): Promise<{ outcome: "cascaded" | "round-closed" }>`
 - Also produces: `FakePaymentProvider.remainderCharges: { bidderId: string; amountCents: number; depositRef: string }[]`, appended to by every `chargeRemainder` call (successful or not), analogous to the existing `.charges` array for deposits.
+
+**Money-safety note (why `confirmPayment` claims before it charges):** Task 11's review flagged that `confirmPayment` as originally drafted had no idempotency guard — two concurrent calls for the same offer (a duplicate "Pay" submission: double-click, network retry, browser back-button resubmit) would both reach `provider.chargeRemainder` and charge the bidder twice for the same remainder. A `db.transaction` wrapper does NOT fix this: `chargeRemainder` is a call to an external payment provider, and a DB rollback cannot undo a real-world charge that already happened. The correct fix is an atomic **claim-before-charge**: a single conditional `UPDATE ... WHERE status = 'pending'` moves the offer to a `"processing"` state, and only the caller that actually wins that update (row count 1) proceeds to charge. A losing concurrent caller sees 0 rows updated and returns immediately without ever touching the payment provider. This requires one small schema change before writing `confirmPayment` — see Step 0.5 below.
 
 - [ ] **Step 0: Extend `FakePaymentProvider` to record remainder charges**
 
@@ -1448,6 +1450,22 @@ export class FakePaymentProvider implements PaymentProvider {
 ```
 
 This replaces the whole class body from Task 5 — the only changes are the new `remainderCharges` field and the first line of `chargeRemainder`. Run `npx vitest run tests/payments/FakePaymentProvider.test.ts` after this change — it must still pass unmodified (the existing tests don't touch `remainderCharges`, so this is purely additive).
+
+- [ ] **Step 0.5: Add a `"processing"` state to `offerStatusEnum`, for the claim-before-charge guard**
+
+In `src/db/schema.ts`, change:
+
+```ts
+export const offerStatusEnum = pgEnum("offer_status", ["pending", "paid", "expired"]);
+```
+
+to:
+
+```ts
+export const offerStatusEnum = pgEnum("offer_status", ["pending", "processing", "paid", "expired"]);
+```
+
+Push the updated schema: `npm run db:push` (confirm it applies cleanly against the running local Postgres — this only adds an enum value, no existing rows are affected since none exist yet in this stage of development). Run `npx vitest run tests/db/schema.test.ts` after — it must still pass unmodified.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1515,6 +1533,22 @@ describe("confirmPayment", () => {
     await confirmPayment(offer.id, new Date(offer.offeredAt.getTime() + 1000), provider);
     expect(provider.refunds).toContain("loser-dep");
   });
+
+  it("a second concurrent call for the same offer is a safe no-op — never double-charges", async () => {
+    const startsAt = new Date(2026, 0, 1, 0, 0, 0);
+    const { offer } = await seedRoundWithOffer(startsAt, 11_000);
+    const provider = new FakePaymentProvider();
+    const now = new Date(offer.offeredAt.getTime() + 1000);
+
+    const [first, second] = await Promise.all([
+      confirmPayment(offer.id, now, provider),
+      confirmPayment(offer.id, now, provider),
+    ]);
+
+    const outcomes = [first.outcome, second.outcome].sort();
+    expect(outcomes).toEqual(["already-processed", "paid"]);
+    expect(provider.remainderCharges).toHaveLength(1);
+  });
 });
 
 describe("resolveExpiredOffer", () => {
@@ -1566,7 +1600,7 @@ Expected: FAIL — `confirmPayment` / `resolveExpiredOffer` not exported.
 Replace the file's import block (the top of `src/engine/roundResolution.ts`) with:
 
 ```ts
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "../db/client";
 import { rounds, paymentOffers, bids, bans } from "../db/schema";
 import { getQueueLeader } from "../db/repository";
@@ -1583,16 +1617,35 @@ export async function confirmPayment(
   now: Date,
   provider: PaymentProvider,
   onInstalled?: (occupantId: string) => void,
-): Promise<{ outcome: "paid" }> {
-  const [offer] = await db.select().from(paymentOffers).where(eq(paymentOffers.id, offerId)).limit(1);
-  if (!offer) throw new Error("Payment offer not found.");
+): Promise<{ outcome: "paid" | "already-processed" }> {
+  // Claim-before-charge: this single conditional UPDATE is what makes concurrent
+  // duplicate calls safe. Postgres row-level locking means a second concurrent
+  // UPDATE targeting the same row blocks until the first commits, then re-evaluates
+  // `status = 'pending'` against the now-"processing" row and affects 0 rows — no
+  // SERIALIZABLE isolation or retry loop needed for this pattern, unlike the
+  // select-then-insert races in placeBidAtomic/createInitialReign/installChampion.
+  const claimed = await db
+    .update(paymentOffers)
+    .set({ status: "processing" })
+    .where(and(eq(paymentOffers.id, offerId), eq(paymentOffers.status, "pending")))
+    .returning();
+
+  if (claimed.length === 0) {
+    return { outcome: "already-processed" };
+  }
+  const offer = claimed[0];
 
   const [bid] = await db.select().from(bids).where(eq(bids.id, offer.bidId)).limit(1);
   if (!bid) throw new Error("Bid not found for offer.");
 
   const remainderCents = bid.amountCents - bid.depositCents;
   const paid = await provider.chargeRemainder(bid.bidderId, remainderCents, bid.depositRef);
-  if (!paid) throw new Error("chargeRemainder returned false inside confirmPayment — caller should not confirm an unsuccessful charge.");
+  if (!paid) {
+    // Release the claim so a legitimate future attempt (or the scheduled expiry
+    // cascade) can still process this offer — do not leave it stuck in "processing".
+    await db.update(paymentOffers).set({ status: "pending" }).where(eq(paymentOffers.id, offerId));
+    throw new Error("chargeRemainder returned false inside confirmPayment — caller should not confirm an unsuccessful charge.");
+  }
 
   await db.update(paymentOffers).set({ status: "paid" }).where(eq(paymentOffers.id, offerId));
   await db.update(rounds).set({ phase: "closed" }).where(eq(rounds.id, offer.roundId));
@@ -1680,7 +1733,7 @@ async function closeRoundAndRefundRemaining(
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run tests/engine/roundResolution.payment.test.ts`
-Expected: PASS — 4 tests passed.
+Expected: PASS — 5 tests passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1994,3 +2047,4 @@ git commit -m "feat: add public scene and leaderboard read queries"
 
 - **Spec coverage:** bidding-phase queue + min increment (Tasks 3, 7), 24h round split 12h/12h (Tasks 10, 12, 13), snapshot-by-timer (Task 10), shared 12h cascade budget with per-attempt 1h cap (Task 12), deposit 10%/$1000 cap (Task 2), refunds only after round resolution (Task 12), 3-round ban enforced at bid placement (Tasks 9, 12), first-bootstrap fixed price (Task 8), `PaymentProvider` boundary + `on_champion_installed` interface point (Tasks 5, 11), concurrent-bid race (Task 7), retinue-of-8 and leaderboard read model (Task 14) — all covered.
 - **Deferred to later plans, intentionally:** real `PaymentProvider` implementations (YooKassa/Stripe), OAuth, the actual HTTP API surface exposing these use cases, wiring `tick` to a real cron/scheduler process, and the static page generation described in [public-page-delivery-design.md](../specs/2026-08-06-public-page-delivery-design.md).
+- **Amended during execution (Task 11 review):** `confirmPayment` (Task 12) gained a claim-before-charge guard (`"processing"` offer status + conditional `UPDATE ... WHERE status = 'pending'`) after Task 11's implementer identified that a duplicate "Pay" submission would otherwise double-charge the bidder — a DB transaction can't fix this since the external payment charge itself isn't rollback-able. Known residual gap, explicitly out of scope for this plan: if `chargeRemainder` never resolves (hangs indefinitely, no provider-level timeout), the offer stays stuck in `"processing"` with no automatic recovery. A real `PaymentProvider` implementation should enforce its own call timeout; nothing in this domain layer currently does.
