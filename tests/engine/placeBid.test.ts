@@ -1,0 +1,75 @@
+import { describe, it, expect, afterEach, afterAll } from "vitest";
+import { sql } from "drizzle-orm";
+import { db, pool } from "../../src/db/client";
+import { reigns, rounds, bids, bans } from "../../src/db/schema";
+import { createInitialReign } from "../../src/engine/bootstrap";
+import { placeBid } from "../../src/engine/placeBid";
+import { FakePaymentProvider } from "../../src/payments/FakePaymentProvider";
+
+afterEach(async () => {
+  await db.delete(bids);
+  await db.delete(bans);
+  await db.delete(rounds);
+  await db.delete(reigns);
+});
+
+afterAll(async () => {
+  await pool.end();
+});
+
+describe("placeBid", () => {
+  it("charges a 10% deposit and records the bid", async () => {
+    await createInitialReign("champ", new Date(2026, 0, 1));
+    const provider = new FakePaymentProvider();
+    const result = await placeBid({ bidderId: "challenger", amountCents: 10_100, now: new Date(2026, 0, 1, 1) }, provider);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.depositCents).toBe(1_010);
+    expect(provider.charges).toHaveLength(1);
+    expect(provider.charges[0]).toMatchObject({ bidderId: "challenger", amountCents: 1_010 });
+  });
+
+  it("rejects a bid below the minimum increment without charging a deposit", async () => {
+    await createInitialReign("champ", new Date(2026, 0, 1));
+    const provider = new FakePaymentProvider();
+    const result = await placeBid({ bidderId: "challenger", amountCents: 10_050, now: new Date(2026, 0, 1, 1) }, provider);
+    expect(result.ok).toBe(false);
+    expect(provider.charges).toHaveLength(0);
+  });
+
+  it("rejects a bid from a banned bidder without charging a deposit", async () => {
+    await createInitialReign("champ", new Date(2026, 0, 1));
+    await db.insert(bans).values({ bidderId: "challenger", bannedUntil: new Date(2026, 0, 10) });
+    const provider = new FakePaymentProvider();
+    const result = await placeBid({ bidderId: "challenger", amountCents: 20_000, now: new Date(2026, 0, 1, 1) }, provider);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected rejection");
+    expect(result.reason).toContain("banned");
+    expect(provider.charges).toHaveLength(0);
+  });
+
+  it("refunds the deposit when a concurrent bid wins the same slot", async () => {
+    await createInitialReign("champ", new Date(2026, 0, 1));
+    const provider = new FakePaymentProvider();
+    const now = new Date(2026, 0, 1, 1);
+
+    // Pre-warm two pool connections so the two placeBid calls below genuinely
+    // overlap instead of running accidentally sequentially — same rationale as
+    // the identical pre-warm in tests/db/repository.placeBidAtomic.test.ts.
+    // Both calls' pre-checks read the same (empty) queue, pass validation, and
+    // charge a deposit; only one wins the atomic insert, and the loser's
+    // rejection must trigger a refund of its already-charged deposit.
+    await Promise.all([db.execute(sql`select 1`), db.execute(sql`select 1`)]);
+
+    const [a, b] = await Promise.all([
+      placeBid({ bidderId: "a", amountCents: 10_100, now }, provider),
+      placeBid({ bidderId: "b", amountCents: 10_100, now }, provider),
+    ]);
+
+    const results = [a, b];
+    expect(results.filter((r) => r.ok)).toHaveLength(1);
+    expect(results.filter((r) => !r.ok)).toHaveLength(1);
+    expect(provider.charges).toHaveLength(2);
+    expect(provider.refunds).toHaveLength(1);
+  });
+});
