@@ -56,4 +56,24 @@ describe("resolveBiddingPhaseSnapshot", () => {
     // 1h attempt window, bounded by the round's own 24h boundary — here the 1h window is the tighter bound.
     expect(offer.expiresAt.getTime()).toBe(Math.min(snapshotAt.getTime() + PAYMENT_ATTEMPT_MS, startsAt.getTime() + ROUND_MS));
   });
+
+  it("a second concurrent call for the same round is a safe no-op — never creates two payment offers", async () => {
+    const startsAt = new Date(2026, 0, 1, 0, 0, 0);
+    const { roundId } = await seedRound(startsAt);
+    await db.insert(bids).values({
+      roundId, bidderId: "a", amountCents: 11_000, depositCents: 1_100, depositRef: "d1", placedAt: new Date(startsAt.getTime() + 1000),
+    });
+    const snapshotAt = new Date(startsAt.getTime() + BIDDING_PHASE_MS);
+
+    const [first, second] = await Promise.all([
+      resolveBiddingPhaseSnapshot(roundId, snapshotAt),
+      resolveBiddingPhaseSnapshot(roundId, snapshotAt),
+    ]);
+
+    const outcomes = [first.outcome, second.outcome].sort();
+    expect(outcomes).toEqual(["already-resolving", "offer-created"]);
+
+    const offers = await db.select().from(paymentOffers).where(eq(paymentOffers.roundId, roundId));
+    expect(offers).toHaveLength(1);
+  });
 });

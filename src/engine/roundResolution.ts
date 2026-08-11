@@ -9,9 +9,21 @@ import type { PaymentProvider } from "../payments/PaymentProvider";
 export async function resolveBiddingPhaseSnapshot(
   roundId: string,
   now: Date,
-): Promise<{ outcome: "empty-closed" | "offer-created" }> {
-  const [round] = await db.select().from(rounds).where(eq(rounds.id, roundId)).limit(1);
-  if (!round) throw new Error("Round not found.");
+): Promise<{ outcome: "empty-closed" | "offer-created" | "already-resolving" }> {
+  // Claim-before-snapshot: symmetric to confirmPayment's claim-before-charge and
+  // resolveExpiredOffer's claim-before-expire guards. Without this, two overlapping
+  // scheduler ticks (or two worker instances) both seeing phase = "bidding" would
+  // both proceed, each creating its own paymentOffers row for the same round.
+  const claimed = await db
+    .update(rounds)
+    .set({ phase: "resolving" })
+    .where(and(eq(rounds.id, roundId), eq(rounds.phase, "bidding")))
+    .returning();
+
+  if (claimed.length === 0) {
+    return { outcome: "already-resolving" };
+  }
+  const round = claimed[0];
 
   const leader = await getQueueLeader(roundId);
 
