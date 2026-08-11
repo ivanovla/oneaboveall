@@ -48,6 +48,25 @@ describe("placeBid", () => {
     expect(provider.charges).toHaveLength(0);
   });
 
+  it("rejects a bid before the round's startsAt has arrived, without charging a deposit", async () => {
+    const reign = await createInitialReign("champ", new Date(2026, 0, 1));
+    // Simulate the scheduler having already opened tomorrow's round: phase
+    // "bidding", but startsAt is still in the future.
+    const futureStartsAt = new Date(2026, 0, 2, 0, 0, 0);
+    await db.insert(rounds).values({ reignId: reign.id, startsAt: futureStartsAt, phase: "bidding" });
+
+    const provider = new FakePaymentProvider();
+    const result = await placeBid(
+      { bidderId: "challenger", amountCents: 20_000, now: new Date(futureStartsAt.getTime() - 1000) },
+      provider,
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected rejection");
+    expect(result.reason).toContain("not accepting bids");
+    expect(provider.charges).toHaveLength(0);
+  });
+
   it("refunds the deposit when a concurrent bid wins the same slot", async () => {
     await createInitialReign("champ", new Date(2026, 0, 1));
     const provider = new FakePaymentProvider();

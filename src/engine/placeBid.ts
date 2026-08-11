@@ -15,7 +15,12 @@ export async function placeBid(
   if (!reign) return { ok: false, reason: "No active reign — the auction hasn't been bootstrapped yet." };
 
   const round = await getLatestRound(reign.id);
-  if (!round || round.phase !== "bidding") {
+  if (!round || round.phase !== "bidding" || round.startsAt > params.now) {
+    // The scheduler creates the next day's round (phase: "bidding") as soon
+    // as the current round closes, but its startsAt is in the future — the
+    // spec is explicit that bidding is not accepted until that round
+    // actually opens. round.startsAt is immutable once inserted, so this
+    // plain comparison is sufficient; no claim-guard race to worry about.
     return { ok: false, reason: "This round is not accepting bids right now." };
   }
 

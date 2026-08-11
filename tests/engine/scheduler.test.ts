@@ -35,7 +35,7 @@ describe("tick", () => {
     expect(round?.phase).toBe("bidding");
   });
 
-  it("carries a reign across multiple rounds until someone pays", async () => {
+  it("survives an empty day then a cascade that exhausts without payment, chaining into a new round each time", async () => {
     const startsAt = new Date(2026, 0, 1, 0, 0, 0);
     await createInitialReign("champ", startsAt);
     const provider = new FakePaymentProvider();
@@ -43,7 +43,7 @@ describe("tick", () => {
     // Day 1: nobody bids.
     await tick(new Date(startsAt.getTime() + ROUND_MS - 1000), provider);
 
-    // Day 2: a challenger bids, then pays.
+    // Day 2: a challenger bids, but never pays.
     const day2Start = new Date(startsAt.getTime() + ROUND_MS);
     const bidResult = await placeBid({ bidderId: "winner", amountCents: 11_000, now: new Date(day2Start.getTime() + 1000) }, provider);
     expect(bidResult.ok).toBe(true);
@@ -62,5 +62,12 @@ describe("tick", () => {
 
     const afterExpiry = await getCurrentReign();
     expect(afterExpiry?.occupantId).toBe("champ"); // still champ, queue was exhausted after the one bidder
+
+    // The exhausted round-2 must have chained into a genuinely new round 3,
+    // not just left the champion untouched — this is the behavior this test
+    // is actually meant to cover (Finding 3, Task 13 review).
+    const finalRound = await getLatestRound(afterExpiry!.id);
+    expect(finalRound?.startsAt).toEqual(new Date(day2Start.getTime() + ROUND_MS));
+    expect(finalRound?.phase).toBe("bidding");
   });
 });
