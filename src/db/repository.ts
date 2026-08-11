@@ -1,6 +1,7 @@
 import { and, desc, asc, eq, gt, isNull } from "drizzle-orm";
 import { db } from "./client";
 import { reigns, rounds, bids, bans } from "./schema";
+import { validateBidAmount } from "../domain/bidValidation";
 
 export type Reign = typeof reigns.$inferSelect;
 export type Round = typeof rounds.$inferSelect;
@@ -38,4 +39,59 @@ export async function isBanned(bidderId: string, now: Date): Promise<boolean> {
     .where(and(eq(bans.bidderId, bidderId), gt(bans.bannedUntil, now)))
     .limit(1);
   return !!row;
+}
+
+const SERIALIZATION_FAILURE = "40001";
+
+export async function placeBidAtomic(params: {
+  roundId: string;
+  bidderId: string;
+  amountCents: number;
+  depositCents: number;
+  depositRef: string;
+}): Promise<{ ok: true; bid: Bid } | { ok: false; reason: string }> {
+  const maxAttempts = 5;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await db.transaction(
+        async (tx) => {
+          const [round] = await tx.select().from(rounds).where(eq(rounds.id, params.roundId)).limit(1);
+          if (!round) return { ok: false, reason: "Round not found." };
+
+          const [reign] = await tx.select().from(reigns).where(eq(reigns.id, round.reignId)).limit(1);
+          if (!reign) return { ok: false, reason: "Reign not found." };
+
+          const [topBid] = await tx
+            .select()
+            .from(bids)
+            .where(eq(bids.roundId, params.roundId))
+            .orderBy(desc(bids.amountCents), asc(bids.placedAt))
+            .limit(1);
+
+          const currentLeaderCents = topBid ? topBid.amountCents : reign.priceCents;
+          const validation = validateBidAmount(params.amountCents, currentLeaderCents);
+          if (!validation.valid) return { ok: false, reason: validation.reason };
+
+          const [inserted] = await tx
+            .insert(bids)
+            .values({
+              roundId: params.roundId,
+              bidderId: params.bidderId,
+              amountCents: params.amountCents,
+              depositCents: params.depositCents,
+              depositRef: params.depositRef,
+              depositStatus: "held",
+            })
+            .returning();
+
+          return { ok: true, bid: inserted };
+        },
+        { isolationLevel: "serializable" },
+      );
+    } catch (err: any) {
+      if (err?.code === SERIALIZATION_FAILURE && attempt < maxAttempts) continue;
+      throw err;
+    }
+  }
+  throw new Error("placeBidAtomic: exceeded retry attempts under serialization conflict");
 }
