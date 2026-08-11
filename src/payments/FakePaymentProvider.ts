@@ -2,6 +2,7 @@ import type { PaymentProvider } from "./PaymentProvider";
 
 export class FakePaymentProvider implements PaymentProvider {
   charges: { bidderId: string; amountCents: number; ref: string }[] = [];
+  remainderCharges: { bidderId: string; amountCents: number; depositRef: string }[] = [];
   refunds: string[] = [];
   private failNextRemainder = false;
 
@@ -11,7 +12,8 @@ export class FakePaymentProvider implements PaymentProvider {
     return ref;
   }
 
-  async chargeRemainder(_bidderId: string, _amountCents: number, _depositRef: string): Promise<boolean> {
+  async chargeRemainder(bidderId: string, amountCents: number, depositRef: string): Promise<boolean> {
+    this.remainderCharges.push({ bidderId, amountCents, depositRef });
     if (this.failNextRemainder) {
       this.failNextRemainder = false;
       return false;

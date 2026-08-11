@@ -2,7 +2,7 @@ import { pgTable, text, integer, timestamp, uuid, pgEnum } from "drizzle-orm/pg-
 
 export const depositStatusEnum = pgEnum("deposit_status", ["held", "refunded", "forfeited"]);
 export const roundPhaseEnum = pgEnum("round_phase", ["bidding", "payment", "closed"]);
-export const offerStatusEnum = pgEnum("offer_status", ["pending", "paid", "expired"]);
+export const offerStatusEnum = pgEnum("offer_status", ["pending", "processing", "paid", "expired"]);
 
 export const reigns = pgTable("reigns", {
   id: uuid("id").defaultRandom().primaryKey(),
