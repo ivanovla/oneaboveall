@@ -1749,10 +1749,87 @@ git commit -m "feat: add payment confirmation, cascade, and round exhaustion"
 **Files:**
 - Create: `src/engine/scheduler.ts`
 - Test: `tests/engine/scheduler.test.ts`
+- Modify: `src/db/schema.ts` (one enum value — see Step 0)
+- Modify: `src/engine/roundResolution.ts` (harden `resolveBiddingPhaseSnapshot` — see Step 0)
 
 **Interfaces:**
 - Consumes: `resolveBiddingPhaseSnapshot`, `resolveExpiredOffer` (Task 10/12), `db`, `rounds`/`paymentOffers` tables, `installChampion` (used indirectly via `confirmPayment`), `BIDDING_PHASE_MS`/`ROUND_MS` (Task 2).
 - Produces: `tick(now: Date, provider: PaymentProvider): Promise<void>` — finds every round whose bidding-phase snapshot is due and not yet taken, and every pending payment offer whose `expiresAt` has passed, and resolves them. Also: when a round closes empty (`resolveBiddingPhaseSnapshot` outcome `"empty-closed"`) or exhausts its cascade (`resolveExpiredOffer` outcome `"round-closed"`), `tick` creates the next day's round for the same reign (`startsAt = round.startsAt + ROUND_MS`, `phase: "bidding"`) — this is the "wait for next day" behavior from the spec, previously left to the caller.
+- `resolveBiddingPhaseSnapshot`'s return type widens to `Promise<{ outcome: "empty-closed" | "offer-created" | "already-resolving" }>` (see Step 0).
+
+**Money-safety note (why `resolveBiddingPhaseSnapshot` needs a claim guard before this task, not after):** Tasks 10 and 12's reviews both flagged that nothing prevents `resolveBiddingPhaseSnapshot` from running twice concurrently for the same round — e.g. two overlapping scheduler ticks (a slow tick still running when the next one fires, or two worker instances). Without a guard, both ticks would see `phase = "bidding"`, both call the function, and both would create a **separate** `paymentOffers` row for the same round (or worse, one could close a round the other is about to create an offer for). Confirming and cascade already claim atomically (Task 12); this closes the matching gap on the round-resolution side, using the identical pattern:
+
+- [ ] **Step 0: Add a `"resolving"` transient phase and a claim guard**
+
+In `src/db/schema.ts`, change:
+
+```ts
+export const roundPhaseEnum = pgEnum("round_phase", ["bidding", "payment", "closed"]);
+```
+
+to:
+
+```ts
+export const roundPhaseEnum = pgEnum("round_phase", ["bidding", "resolving", "payment", "closed"]);
+```
+
+Push the schema: `npm run db:push`. Run `npx vitest run tests/db/schema.test.ts` — must still pass unmodified.
+
+In `src/engine/roundResolution.ts`, modify `resolveBiddingPhaseSnapshot` (from Task 10) to claim the round before touching anything else:
+
+```ts
+export async function resolveBiddingPhaseSnapshot(
+  roundId: string,
+  now: Date,
+): Promise<{ outcome: "empty-closed" | "offer-created" | "already-resolving" }> {
+  const claimed = await db
+    .update(rounds)
+    .set({ phase: "resolving" })
+    .where(and(eq(rounds.id, roundId), eq(rounds.phase, "bidding")))
+    .returning();
+
+  if (claimed.length === 0) {
+    return { outcome: "already-resolving" };
+  }
+  const round = claimed[0];
+
+  const leader = await getQueueLeader(roundId);
+
+  if (!leader) {
+    await db.update(rounds).set({ phase: "closed" }).where(eq(rounds.id, roundId));
+    return { outcome: "empty-closed" };
+  }
+```
+
+(The rest of the function — computing `expiresAt`, inserting the `paymentOffers` row, and setting `phase: "payment"` — is unchanged from Task 10; only the top of the function and the return type change. You'll need `and` added to the `drizzle-orm` import in this file if it isn't already there from Task 12's changes.)
+
+Update the two existing tests in `tests/engine/roundResolution.snapshot.test.ts` (Task 10) if their `seedRound` helper or assertions need adjustment for the new claim step — they shouldn't, since the function's external behavior (final phase, offer creation) is unchanged; only add a new test here:
+
+```ts
+it("a second concurrent call for the same round is a safe no-op — never creates two payment offers", async () => {
+  const startsAt = new Date(2026, 0, 1, 0, 0, 0);
+  const { roundId } = await seedRound(startsAt);
+  await db.insert(bids).values({
+    roundId, bidderId: "a", amountCents: 11_000, depositCents: 1_100, depositRef: "d1", placedAt: new Date(startsAt.getTime() + 1000),
+  });
+  const snapshotAt = new Date(startsAt.getTime() + BIDDING_PHASE_MS);
+
+  const [first, second] = await Promise.all([
+    resolveBiddingPhaseSnapshot(roundId, snapshotAt),
+    resolveBiddingPhaseSnapshot(roundId, snapshotAt),
+  ]);
+
+  const outcomes = [first.outcome, second.outcome].sort();
+  expect(outcomes).toEqual(["already-resolving", "offer-created"]);
+
+  const offers = await db.select().from(paymentOffers).where(eq(paymentOffers.roundId, roundId));
+  expect(offers).toHaveLength(1);
+});
+```
+
+Run `npx vitest run tests/engine/roundResolution.snapshot.test.ts` — must pass (3 tests now). Then run the full suite once to confirm nothing else broke (Task 7's `placeBidAtomic` phase check compares `!== "bidding"`, which still correctly rejects bids during the new `"resolving"` state — no change needed there).
+
+Commit this as its own small commit (e.g. `fix: add claim guard to resolveBiddingPhaseSnapshot to prevent duplicate payment offers`) before moving on to Step 1 below.
 
 - [ ] **Step 1: Write the failing test**
 
