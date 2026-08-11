@@ -1401,6 +1401,7 @@ git commit -m "feat: add champion installation"
 
 **Files:**
 - Modify: `src/engine/roundResolution.ts`
+- Modify: `src/payments/FakePaymentProvider.ts` (add remainder-charge tracking — Task 5's fake only recorded `chargeDeposit` calls in `.charges`; this task's tests need to assert on `chargeRemainder` calls too, which is a distinct method)
 - Test: `tests/engine/roundResolution.payment.test.ts`
 
 **Interfaces:**
@@ -1408,6 +1409,45 @@ git commit -m "feat: add champion installation"
 - Produces two functions appended to `src/engine/roundResolution.ts`:
   - `confirmPayment(offerId: string, now: Date, provider: PaymentProvider, onInstalled?: (occupantId: string) => void): Promise<{ outcome: "paid" }>`
   - `resolveExpiredOffer(offerId: string, now: Date, provider: PaymentProvider): Promise<{ outcome: "cascaded" | "round-closed" }>`
+- Also produces: `FakePaymentProvider.remainderCharges: { bidderId: string; amountCents: number; depositRef: string }[]`, appended to by every `chargeRemainder` call (successful or not), analogous to the existing `.charges` array for deposits.
+
+- [ ] **Step 0: Extend `FakePaymentProvider` to record remainder charges**
+
+In `src/payments/FakePaymentProvider.ts`, add a new public field and populate it inside `chargeRemainder`:
+
+```ts
+export class FakePaymentProvider implements PaymentProvider {
+  charges: { bidderId: string; amountCents: number; ref: string }[] = [];
+  remainderCharges: { bidderId: string; amountCents: number; depositRef: string }[] = [];
+  refunds: string[] = [];
+  private failNextRemainder = false;
+
+  async chargeDeposit(bidderId: string, amountCents: number): Promise<string> {
+    const ref = `dep_${this.charges.length + 1}`;
+    this.charges.push({ bidderId, amountCents, ref });
+    return ref;
+  }
+
+  async chargeRemainder(bidderId: string, amountCents: number, depositRef: string): Promise<boolean> {
+    this.remainderCharges.push({ bidderId, amountCents, depositRef });
+    if (this.failNextRemainder) {
+      this.failNextRemainder = false;
+      return false;
+    }
+    return true;
+  }
+
+  async refund(depositRef: string): Promise<void> {
+    this.refunds.push(depositRef);
+  }
+
+  failNextRemainderCharge(): void {
+    this.failNextRemainder = true;
+  }
+}
+```
+
+This replaces the whole class body from Task 5 — the only changes are the new `remainderCharges` field and the first line of `chargeRemainder`. Run `npx vitest run tests/payments/FakePaymentProvider.test.ts` after this change — it must still pass unmodified (the existing tests don't touch `remainderCharges`, so this is purely additive).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1462,7 +1502,7 @@ describe("confirmPayment", () => {
     const [updatedRound] = await db.select().from(rounds).where(eq(rounds.id, roundId));
     expect(updatedRound.phase).toBe("closed");
 
-    expect(provider.charges.some((c) => c.bidderId === bid.bidderId)).toBe(true);
+    expect(provider.remainderCharges.some((c) => c.bidderId === bid.bidderId)).toBe(true);
   });
 
   it("refunds every other bid in the round on payment", async () => {
