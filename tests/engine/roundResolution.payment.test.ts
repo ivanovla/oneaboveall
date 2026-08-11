@@ -114,4 +114,83 @@ describe("resolveExpiredOffer", () => {
     const [round] = await db.select().from(rounds).where(eq(rounds.id, roundId));
     expect(round.phase).toBe("closed");
   });
+
+  it("picks the exact next-highest bid under an amount-desc/placedAt-asc tie-break with 3+ candidates", async () => {
+    const startsAt = new Date(2026, 0, 1, 0, 0, 0);
+    const { roundId, offer, snapshotAt } = await seedRoundWithOffer(startsAt, 11_000);
+    // Two bids tie at 10_500 — the earlier-placed one must win the tie-break —
+    // plus a third, lower bid that must NOT be picked despite being a valid
+    // "some other bid" (this is what the old "not equal to the forfeited bid"
+    // assertion could not catch).
+    const [laterTie] = await db
+      .insert(bids)
+      .values({ roundId, bidderId: "tie-later", amountCents: 10_500, depositCents: 1_050, depositRef: "tie-later-dep", placedAt: new Date(startsAt.getTime() + 700) })
+      .returning();
+    const [earlierTie] = await db
+      .insert(bids)
+      .values({ roundId, bidderId: "tie-earlier", amountCents: 10_500, depositCents: 1_050, depositRef: "tie-earlier-dep", placedAt: new Date(startsAt.getTime() + 500) })
+      .returning();
+    await db.insert(bids).values({
+      roundId, bidderId: "low-bidder", amountCents: 10_000, depositCents: 1_000, depositRef: "low-dep", placedAt: new Date(startsAt.getTime() + 100),
+    });
+    const provider = new FakePaymentProvider();
+    const expiry = new Date(Math.min(snapshotAt.getTime() + PAYMENT_ATTEMPT_MS, startsAt.getTime() + ROUND_MS));
+
+    const result = await resolveExpiredOffer(offer.id, expiry, provider);
+    expect(result.outcome).toBe("cascaded");
+
+    const [newOffer] = await db.select().from(paymentOffers).where(eq(paymentOffers.status, "pending"));
+    expect(newOffer.bidId).toBe(earlierTie.id);
+    expect(newOffer.bidId).not.toBe(laterTie.id);
+  });
+
+  it("a second concurrent call for the same offer is a safe no-op — only one ban row and one cascade result", async () => {
+    const startsAt = new Date(2026, 0, 1, 0, 0, 0);
+    const { roundId, offer, snapshotAt } = await seedRoundWithOffer(startsAt, 11_000);
+    await db.insert(bids).values({
+      roundId, bidderId: "second-in-line", amountCents: 10_500, depositCents: 1_050, depositRef: "second-dep", placedAt: new Date(startsAt.getTime() + 500),
+    });
+    const provider = new FakePaymentProvider();
+    const expiry = new Date(Math.min(snapshotAt.getTime() + PAYMENT_ATTEMPT_MS, startsAt.getTime() + ROUND_MS));
+
+    const [first, second] = await Promise.all([
+      resolveExpiredOffer(offer.id, expiry, provider),
+      resolveExpiredOffer(offer.id, expiry, provider),
+    ]);
+
+    const outcomes = [first.outcome, second.outcome].sort();
+    expect(outcomes).toEqual(["already-processed", "cascaded"]);
+
+    const allBans = await db.select().from(bans).where(eq(bans.bidderId, "a"));
+    expect(allBans).toHaveLength(1);
+
+    const pendingOffers = await db.select().from(paymentOffers).where(eq(paymentOffers.status, "pending"));
+    expect(pendingOffers).toHaveLength(1);
+  });
+});
+
+describe("cross-cutting: cascade then payment must not un-forfeit the earlier non-payer", () => {
+  it("does not refund a deposit already forfeited by an earlier cascade step when the eventual winner pays", async () => {
+    const startsAt = new Date(2026, 0, 1, 0, 0, 0);
+    const { roundId, offer, snapshotAt } = await seedRoundWithOffer(startsAt, 11_000);
+    await db.insert(bids).values({
+      roundId, bidderId: "second-in-line", amountCents: 10_500, depositCents: 1_050, depositRef: "second-dep", placedAt: new Date(startsAt.getTime() + 500),
+    });
+    const provider = new FakePaymentProvider();
+    const expiry = new Date(Math.min(snapshotAt.getTime() + PAYMENT_ATTEMPT_MS, startsAt.getTime() + ROUND_MS));
+
+    const cascadeResult = await resolveExpiredOffer(offer.id, expiry, provider);
+    expect(cascadeResult.outcome).toBe("cascaded");
+
+    const [newOffer] = await db.select().from(paymentOffers).where(eq(paymentOffers.status, "pending"));
+    const payResult = await confirmPayment(newOffer.id, new Date(expiry.getTime() + 1000), provider);
+    expect(payResult.outcome).toBe("paid");
+
+    // Bidder "a" already forfeited their deposit for failing to pay — that must
+    // stay forfeited even though bidder "second-in-line" (the cascade target)
+    // went on to pay successfully.
+    expect(provider.refunds).not.toContain("d1");
+    const [forfeitedBid] = await db.select().from(bids).where(eq(bids.bidderId, "a"));
+    expect(forfeitedBid.depositStatus).toBe("forfeited");
+  });
 });

@@ -77,7 +77,10 @@ export async function confirmPayment(
 
   const otherBids = await db.select().from(bids).where(eq(bids.roundId, offer.roundId));
   for (const other of otherBids) {
-    if (other.id === bid.id) continue;
+    // Only refund bids still "held" — a bid that already forfeited its deposit
+    // in an earlier cascade step (Finding 1, Task 12 review) must stay forfeited;
+    // refunding it here would un-do the non-payment penalty for a banned bidder.
+    if (other.id === bid.id || other.depositStatus !== "held") continue;
     await provider.refund(other.depositRef);
     await db.update(bids).set({ depositStatus: "refunded" }).where(eq(bids.id, other.id));
   }
@@ -91,16 +94,28 @@ export async function resolveExpiredOffer(
   offerId: string,
   now: Date,
   provider: PaymentProvider,
-): Promise<{ outcome: "cascaded" | "round-closed" }> {
-  const [offer] = await db.select().from(paymentOffers).where(eq(paymentOffers.id, offerId)).limit(1);
-  if (!offer) throw new Error("Payment offer not found.");
+): Promise<{ outcome: "cascaded" | "round-closed" | "already-processed" }> {
+  // Claim-before-expire: symmetric to confirmPayment's claim-before-charge guard
+  // (Finding 2, Task 12 review). Without this, a payment landing in the same
+  // instant the scheduler's tick expires the same offer would both succeed:
+  // the payer gets installed as champion AND banned with a forfeited deposit,
+  // and a duplicate cascade offer gets created on an already-closed round.
+  const claimed = await db
+    .update(paymentOffers)
+    .set({ status: "expired" })
+    .where(and(eq(paymentOffers.id, offerId), eq(paymentOffers.status, "pending")))
+    .returning();
+
+  if (claimed.length === 0) {
+    return { outcome: "already-processed" };
+  }
+  const offer = claimed[0];
 
   const [round] = await db.select().from(rounds).where(eq(rounds.id, offer.roundId)).limit(1);
   if (!round) throw new Error("Round not found.");
 
   const [failedBid] = await db.select().from(bids).where(eq(bids.id, offer.bidId)).limit(1);
 
-  await db.update(paymentOffers).set({ status: "expired" }).where(eq(paymentOffers.id, offerId));
   await db.update(bids).set({ depositStatus: "forfeited" }).where(eq(bids.id, offer.bidId));
   await db.insert(bans).values({ bidderId: failedBid.bidderId, bannedUntil: new Date(now.getTime() + BAN_DURATION_MS) });
 
