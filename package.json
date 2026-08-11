@@ -8,6 +8,7 @@
     "db:push": "drizzle-kit push"
   },
   "dependencies": {
+    "dotenv": "^17.4.2",
     "drizzle-orm": "^0.33.0",
     "pg": "^8.12.0"
   },
