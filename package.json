@@ -1,0 +1,21 @@
+{
+  "name": "auction-engine",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "db:push": "drizzle-kit push"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.33.0",
+    "pg": "^8.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "@types/pg": "^8.11.6",
+    "drizzle-kit": "^0.24.2",
+    "typescript": "^5.5.4",
+    "vitest": "^2.0.5"
+  }
+}
