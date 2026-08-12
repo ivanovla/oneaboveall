@@ -26,7 +26,7 @@ async function seedRoundWithOffer(startsAt: Date, bidAmount: number) {
     .values({ roundId: round.id, bidderId: "a", amountCents: bidAmount, depositCents: 1_000, depositRef: "d1", placedAt: new Date(startsAt.getTime() + 1000) })
     .returning();
   const snapshotAt = new Date(startsAt.getTime() + BIDDING_PHASE_MS);
-  await resolveBiddingPhaseSnapshot(round.id, snapshotAt);
+  await resolveBiddingPhaseSnapshot(round.id, snapshotAt, new FakePaymentProvider());
   const [offer] = await db.select().from(paymentOffers).where(eq(paymentOffers.roundId, round.id));
   return { reignId: reign.id, roundId: round.id, bid, offer, snapshotAt };
 }
@@ -48,6 +48,20 @@ describe("confirmPayment", () => {
     expect(updatedRound.phase).toBe("closed");
 
     expect(provider.remainderCharges.some((c) => c.bidderId === bid.bidderId)).toBe(true);
+  });
+
+  it("marks the winner's own deposit 'applied', not 'refunded' — it was credited, not returned", async () => {
+    const startsAt = new Date(2026, 0, 1, 0, 0, 0);
+    const { bid, offer } = await seedRoundWithOffer(startsAt, 11_000);
+    const provider = new FakePaymentProvider();
+
+    await confirmPayment(offer.id, new Date(offer.offeredAt.getTime() + 1000), provider);
+
+    const [winningBid] = await db.select().from(bids).where(eq(bids.id, bid.id));
+    expect(winningBid.depositStatus).toBe("applied");
+    // The remainder charge is amount - deposit, so no money went back.
+    expect(provider.refunds).not.toContain(bid.depositRef);
+    expect(provider.remainderCharges[0].amountCents).toBe(bid.amountCents - bid.depositCents);
   });
 
   it("refunds every other bid in the round on payment", async () => {
@@ -142,6 +156,28 @@ describe("resolveExpiredOffer", () => {
     const [newOffer] = await db.select().from(paymentOffers).where(eq(paymentOffers.status, "pending"));
     expect(newOffer.bidId).toBe(earlierTie.id);
     expect(newOffer.bidId).not.toBe(laterTie.id);
+  });
+
+  it("never cascades to a bid placed after the bidding window closed", async () => {
+    const startsAt = new Date(2026, 0, 1, 0, 0, 0);
+    const { roundId, offer, snapshotAt } = await seedRoundWithOffer(startsAt, 11_000);
+    const [inWindow] = await db
+      .insert(bids)
+      .values({ roundId, bidderId: "in-window", amountCents: 10_500, depositCents: 1_050, depositRef: "in-dep", placedAt: new Date(startsAt.getTime() + 500) })
+      .returning();
+    // Higher, but placed after the window closed — it must not win the round
+    // through the cascade any more than it could win the snapshot.
+    await db.insert(bids).values({
+      roundId, bidderId: "late", amountCents: 20_000, depositCents: 2_000, depositRef: "late-dep", placedAt: new Date(snapshotAt.getTime() + 1000),
+    });
+    const provider = new FakePaymentProvider();
+    const expiry = new Date(Math.min(snapshotAt.getTime() + PAYMENT_ATTEMPT_MS, startsAt.getTime() + ROUND_MS));
+
+    const result = await resolveExpiredOffer(offer.id, expiry, provider);
+    expect(result.outcome).toBe("cascaded");
+
+    const [newOffer] = await db.select().from(paymentOffers).where(eq(paymentOffers.status, "pending"));
+    expect(newOffer.bidId).toBe(inWindow.id);
   });
 
   it("a second concurrent call for the same offer is a safe no-op — only one ban row and one cascade result", async () => {

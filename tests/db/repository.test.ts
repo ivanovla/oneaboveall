@@ -59,6 +59,23 @@ describe("getQueueLeader", () => {
     const leader = await getQueueLeader(round.id);
     expect(leader?.bidderId).toBe("c"); // tied on amount with b, but placed earliest
   });
+
+  it("excludes bids placed after asOf when asOf is given", async () => {
+    const [reign] = await db.insert(reigns).values({ occupantId: "u1", priceCents: 10_000, startedAt: new Date() }).returning();
+    const [round] = await db.insert(rounds).values({ reignId: reign.id, startsAt: new Date() }).returning();
+    const windowClose = new Date(2026, 0, 1, 12, 0, 0);
+    await db.insert(bids).values([
+      { roundId: round.id, bidderId: "in-window", amountCents: 11_000, depositCents: 1_100, depositRef: "d1", placedAt: new Date(windowClose.getTime() - 1000) },
+      { roundId: round.id, bidderId: "late", amountCents: 99_000, depositCents: 9_900, depositRef: "d2", placedAt: new Date(windowClose.getTime() + 1000) },
+    ]);
+
+    // Without asOf the late (higher) bid leads; with asOf it is invisible.
+    expect((await getQueueLeader(round.id))?.bidderId).toBe("late");
+    expect((await getQueueLeader(round.id, windowClose))?.bidderId).toBe("in-window");
+
+    // A bid placed exactly at asOf is still inside the window.
+    expect((await getQueueLeader(round.id, new Date(windowClose.getTime() + 1000)))?.bidderId).toBe("late");
+  });
 });
 
 describe("isBanned", () => {

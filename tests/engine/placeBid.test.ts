@@ -5,6 +5,7 @@ import { reigns, rounds, bids, bans } from "../../src/db/schema";
 import { createInitialReign } from "../../src/engine/bootstrap";
 import { placeBid } from "../../src/engine/placeBid";
 import { FakePaymentProvider } from "../../src/payments/FakePaymentProvider";
+import { BIDDING_PHASE_MS, MAX_BID_CENTS } from "../../src/domain/config";
 
 afterEach(async () => {
   await db.delete(bids);
@@ -65,6 +66,73 @@ describe("placeBid", () => {
     if (result.ok) throw new Error("expected rejection");
     expect(result.reason).toContain("not accepting bids");
     expect(provider.charges).toHaveLength(0);
+  });
+
+  it("rejects a bid placed after the bidding window closed, without charging a deposit", async () => {
+    // The round keeps phase "bidding" from T0+12h until the scheduler's tick
+    // snapshots it. A sniper waiting for the window to visibly close must not
+    // be able to slip a bid into that gap and win the snapshot.
+    const startsAt = new Date(2026, 0, 1, 0, 0, 0);
+    await createInitialReign("champ", startsAt);
+    const provider = new FakePaymentProvider();
+
+    const result = await placeBid(
+      { bidderId: "sniper", amountCents: 20_000, now: new Date(startsAt.getTime() + BIDDING_PHASE_MS + 3 * 60 * 60 * 1000) },
+      provider,
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected rejection");
+    expect(result.reason).toContain("not accepting bids");
+    expect(provider.charges).toHaveLength(0);
+    expect(await db.select().from(bids)).toHaveLength(0);
+  });
+
+  it("accepts a bid in the last millisecond of the window and rejects one exactly at the close", async () => {
+    const startsAt = new Date(2026, 0, 1, 0, 0, 0);
+    await createInitialReign("champ", startsAt);
+    const provider = new FakePaymentProvider();
+    const closesAt = new Date(startsAt.getTime() + BIDDING_PHASE_MS);
+
+    const justInside = await placeBid(
+      { bidderId: "early", amountCents: 10_100, now: new Date(closesAt.getTime() - 1) },
+      provider,
+    );
+    expect(justInside.ok).toBe(true);
+
+    const atClose = await placeBid({ bidderId: "late", amountCents: 20_000, now: closesAt }, provider);
+    expect(atClose.ok).toBe(false);
+    expect(provider.charges).toHaveLength(1); // only the accepted bid was charged
+  });
+
+  it("rejects a NaN amount before any deposit is charged", async () => {
+    await createInitialReign("champ", new Date(2026, 0, 1));
+    const provider = new FakePaymentProvider();
+
+    const result = await placeBid({ bidderId: "challenger", amountCents: NaN, now: new Date(2026, 0, 1, 1) }, provider);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected rejection");
+    expect(result.reason).toContain("whole number");
+    expect(provider.charges).toHaveLength(0);
+    expect(provider.refunds).toHaveLength(0);
+    expect(await db.select().from(bids)).toHaveLength(0);
+  });
+
+  it("rejects an amount above MAX_BID_CENTS before any deposit is charged", async () => {
+    // 3_000_000_000 exceeds Postgres int4 — reaching the insert would throw
+    // 22003 with the deposit already charged and nothing to refund it.
+    await createInitialReign("champ", new Date(2026, 0, 1));
+    const provider = new FakePaymentProvider();
+
+    const result = await placeBid({ bidderId: "challenger", amountCents: 3_000_000_000, now: new Date(2026, 0, 1, 1) }, provider);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected rejection");
+    expect(result.reason).toContain(String(MAX_BID_CENTS));
+    expect(provider.charges).toHaveLength(0);
+    expect(provider.refunds).toHaveLength(0);
+    expect(await db.select().from(bids)).toHaveLength(0);
   });
 
   it("refunds the deposit when a concurrent bid wins the same slot", async () => {

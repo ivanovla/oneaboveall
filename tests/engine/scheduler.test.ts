@@ -70,4 +70,38 @@ describe("tick", () => {
     expect(finalRound?.startsAt).toEqual(new Date(day2Start.getTime() + ROUND_MS));
     expect(finalRound?.phase).toBe("bidding");
   });
+
+  it("never forfeits or bans the leader when the tick itself runs late", async () => {
+    // The scheduler was down across the whole payment window. The offer this
+    // tick would create expires before the tick's own expiry loop reaches it,
+    // so without the guard the leader is forfeited and banned for 3 rounds
+    // inside the very tick that first offered them the chance to pay.
+    const startsAt = new Date(2026, 0, 1, 0, 0, 0);
+    const reign = await createInitialReign("champ", startsAt);
+    const provider = new FakePaymentProvider();
+
+    const bidResult = await placeBid(
+      { bidderId: "unlucky", amountCents: 11_000, now: new Date(startsAt.getTime() + 1000) },
+      provider,
+    );
+    expect(bidResult.ok).toBe(true);
+
+    // 3h after the window closed — the 1h payment window (ending at T0+13h)
+    // is long gone.
+    await tick(new Date(startsAt.getTime() + BIDDING_PHASE_MS + 3 * 60 * 60 * 1000), provider);
+
+    expect(await db.select().from(paymentOffers)).toHaveLength(0);
+    expect(await db.select().from(bans)).toHaveLength(0);
+
+    const [bid] = await db.select().from(bids);
+    expect(bid.depositStatus).toBe("refunded");
+    expect(provider.refunds).toEqual([bid.depositRef]);
+
+    // Still the same champion, and the schedule moved on to the next day.
+    const current = await getCurrentReign();
+    expect(current?.occupantId).toBe("champ");
+    const nextRound = await getLatestRound(reign.id);
+    expect(nextRound?.startsAt).toEqual(new Date(startsAt.getTime() + ROUND_MS));
+    expect(nextRound?.phase).toBe("bidding");
+  });
 });

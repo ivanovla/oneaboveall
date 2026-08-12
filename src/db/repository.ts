@@ -1,4 +1,4 @@
-import { and, desc, asc, eq, gt, isNull } from "drizzle-orm";
+import { and, desc, asc, eq, gt, lte, isNull } from "drizzle-orm";
 import { db } from "./client";
 import { reigns, rounds, bids, bans } from "./schema";
 import { validateBidAmount } from "../domain/bidValidation";
@@ -22,11 +22,16 @@ export async function getLatestRound(reignId: string): Promise<Round | null> {
   return round ?? null;
 }
 
-export async function getQueueLeader(roundId: string): Promise<Bid | null> {
+export async function getQueueLeader(roundId: string, asOf?: Date): Promise<Bid | null> {
+  // `asOf` (optional, no time filter by default) restricts the queue to bids
+  // placed at or before that instant. The bidding-phase snapshot passes the
+  // window's close time so that a bid which somehow slipped past placeBid's
+  // window guard can never win the snapshot.
+  const where = asOf ? and(eq(bids.roundId, roundId), lte(bids.placedAt, asOf)) : eq(bids.roundId, roundId);
   const [top] = await db
     .select()
     .from(bids)
-    .where(eq(bids.roundId, roundId))
+    .where(where)
     .orderBy(desc(bids.amountCents), asc(bids.placedAt))
     .limit(1);
   return top ?? null;
@@ -49,6 +54,11 @@ export async function placeBidAtomic(params: {
   amountCents: number;
   depositCents: number;
   depositRef: string;
+  // When omitted the column's DEFAULT now() (the database clock) is used.
+  // placeBid passes its own `now` so that a bid's placedAt agrees with the
+  // instant the bidding-window guard was evaluated against — the snapshot's
+  // `asOf` filter compares the two.
+  placedAt?: Date;
   onRetry?: () => void;
 }): Promise<{ ok: true; bid: Bid } | { ok: false; reason: string }> {
   const maxAttempts = 5;
@@ -83,6 +93,7 @@ export async function placeBidAtomic(params: {
               depositCents: params.depositCents,
               depositRef: params.depositRef,
               depositStatus: "held",
+              ...(params.placedAt ? { placedAt: params.placedAt } : {}),
             })
             .returning();
 

@@ -3,12 +3,21 @@ import { db } from "../db/client";
 import { rounds, paymentOffers, bids, bans } from "../db/schema";
 import { getQueueLeader } from "../db/repository";
 import { installChampion } from "./installChampion";
-import { PAYMENT_ATTEMPT_MS, ROUND_MS, BAN_DURATION_MS } from "../domain/config";
+import { PAYMENT_ATTEMPT_MS, ROUND_MS, BAN_DURATION_MS, BIDDING_PHASE_MS } from "../domain/config";
 import type { PaymentProvider } from "../payments/PaymentProvider";
 
 export async function resolveBiddingPhaseSnapshot(
   roundId: string,
-  now: Date,
+  // The instant the bidding window closed on the ideal schedule grid
+  // (round.startsAt + BIDDING_PHASE_MS). All derived deadlines are computed
+  // from this so a late tick does not push the schedule around.
+  snapshotAt: Date,
+  provider: PaymentProvider,
+  // The instant this resolution is actually running. Defaults to snapshotAt
+  // (an on-time tick, and every direct caller that doesn't care); the scheduler
+  // passes the real clock so a late tick can detect that the payment window it
+  // is about to hand out has already elapsed.
+  executedAt: Date = snapshotAt,
 ): Promise<{ outcome: "empty-closed" | "offer-created" | "already-resolving" }> {
   // Claim-before-snapshot: symmetric to confirmPayment's claim-before-charge and
   // resolveExpiredOffer's claim-before-expire guards. Without this, two overlapping
@@ -25,7 +34,10 @@ export async function resolveBiddingPhaseSnapshot(
   }
   const round = claimed[0];
 
-  const leader = await getQueueLeader(roundId);
+  // asOf pins the queue to the bidding window: a bid placed after the window
+  // closed can never win the snapshot, even if it somehow slipped past
+  // placeBid's window guard.
+  const leader = await getQueueLeader(roundId, snapshotAt);
 
   if (!leader) {
     await db.update(rounds).set({ phase: "closed" }).where(eq(rounds.id, roundId));
@@ -33,13 +45,26 @@ export async function resolveBiddingPhaseSnapshot(
   }
 
   const roundBoundary = new Date(round.startsAt.getTime() + ROUND_MS);
-  const attemptExpiry = new Date(now.getTime() + PAYMENT_ATTEMPT_MS);
+  const attemptExpiry = new Date(snapshotAt.getTime() + PAYMENT_ATTEMPT_MS);
   const expiresAt = attemptExpiry.getTime() < roundBoundary.getTime() ? attemptExpiry : roundBoundary;
+
+  if (expiresAt.getTime() <= executedAt.getTime()) {
+    // The scheduler is running late enough that the payment offer would be born
+    // already expired: the very next loop of this same tick would pick it up,
+    // forfeit the leader's deposit and ban them for 3 rounds — punishing a
+    // bidder who was never notified and never had a usable moment to pay. That
+    // is an infrastructure failure, not a bidder failure. Hand nobody an offer,
+    // give every held deposit in the round back, and close the round in the
+    // same terminal state as an empty one (champion unchanged; the caller
+    // starts the next day's round).
+    await closeRoundAndRefundHeld(roundId, provider);
+    return { outcome: "empty-closed" };
+  }
 
   await db.insert(paymentOffers).values({
     roundId,
     bidId: leader.id,
-    offeredAt: now,
+    offeredAt: snapshotAt,
     expiresAt,
     status: "pending",
   });
@@ -85,7 +110,11 @@ export async function confirmPayment(
 
   await db.update(paymentOffers).set({ status: "paid" }).where(eq(paymentOffers.id, offerId));
   await db.update(rounds).set({ phase: "closed" }).where(eq(rounds.id, offer.roundId));
-  await db.update(bids).set({ depositStatus: "refunded" }).where(eq(bids.id, bid.id));
+  // "applied", not "refunded": the winner's deposit is credited toward the
+  // final price (chargeRemainder bills amount - deposit), it is never given
+  // back. Labelling it "refunded" would overstate refunds in any accounting
+  // rollup over deposit_status by exactly the winning deposit, every round.
+  await db.update(bids).set({ depositStatus: "applied" }).where(eq(bids.id, bid.id));
 
   const otherBids = await db.select().from(bids).where(eq(bids.roundId, offer.roundId));
   for (const other of otherBids) {
@@ -133,19 +162,26 @@ export async function resolveExpiredOffer(
 
   const roundBoundary = new Date(round.startsAt.getTime() + ROUND_MS);
   if (now.getTime() >= roundBoundary.getTime()) {
-    return closeRoundAndRefundRemaining(round.id, offer.bidId, provider, "round-closed");
+    await closeRoundAndRefundHeld(round.id, provider, offer.bidId);
+    return { outcome: "round-closed" };
   }
 
   const remainingBids = await db
     .select()
     .from(bids)
     .where(eq(bids.roundId, offer.roundId));
-  const nextCandidates = remainingBids.filter((b) => b.id !== offer.bidId && b.depositStatus === "held");
+  // Same window pin as the snapshot's `asOf`: a bid placed after the bidding
+  // window closed must not be able to win the round through the cascade either.
+  const biddingClosedAt = new Date(round.startsAt.getTime() + BIDDING_PHASE_MS);
+  const nextCandidates = remainingBids.filter(
+    (b) => b.id !== offer.bidId && b.depositStatus === "held" && b.placedAt.getTime() <= biddingClosedAt.getTime(),
+  );
   nextCandidates.sort((a, b) => b.amountCents - a.amountCents || a.placedAt.getTime() - b.placedAt.getTime());
   const next = nextCandidates[0];
 
   if (!next) {
-    return closeRoundAndRefundRemaining(round.id, offer.bidId, provider, "round-closed");
+    await closeRoundAndRefundHeld(round.id, provider, offer.bidId);
+    return { outcome: "round-closed" };
   }
 
   const attemptExpiry = new Date(now.getTime() + PAYMENT_ATTEMPT_MS);
@@ -162,12 +198,14 @@ export async function resolveExpiredOffer(
   return { outcome: "cascaded" };
 }
 
-async function closeRoundAndRefundRemaining(
+// Closes the round and gives back every deposit still "held" on it. Bids that
+// already forfeited (a non-payer earlier in the cascade) or were already
+// refunded are left alone.
+async function closeRoundAndRefundHeld(
   roundId: string,
-  excludeBidId: string,
   provider: PaymentProvider,
-  outcome: "round-closed",
-): Promise<{ outcome: "round-closed" }> {
+  excludeBidId?: string,
+): Promise<void> {
   await db.update(rounds).set({ phase: "closed" }).where(eq(rounds.id, roundId));
 
   const remaining = await db.select().from(bids).where(eq(bids.roundId, roundId));
@@ -176,6 +214,4 @@ async function closeRoundAndRefundRemaining(
     await provider.refund(b.depositRef);
     await db.update(bids).set({ depositStatus: "refunded" }).where(eq(bids.id, b.id));
   }
-
-  return { outcome };
 }

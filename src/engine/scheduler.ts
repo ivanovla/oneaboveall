@@ -16,7 +16,10 @@ export async function tick(now: Date, provider: PaymentProvider): Promise<void> 
     if (now.getTime() < snapshotAt.getTime()) continue;
 
     try {
-      const result = await resolveBiddingPhaseSnapshot(round.id, snapshotAt);
+      // snapshotAt keeps every derived deadline on the ideal grid; `now` lets
+      // the resolution notice that it is running so late the payment window it
+      // would hand out has already elapsed.
+      const result = await resolveBiddingPhaseSnapshot(round.id, snapshotAt, provider, now);
       if (result.outcome === "empty-closed") {
         await startNextRound(round.reignId, round.startsAt);
       }
