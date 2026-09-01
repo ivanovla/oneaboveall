@@ -40,3 +40,69 @@ describe("AuctionFlow", () => {
     expect(screen.getByText("You're first in line")).toBeInTheDocument();
   });
 });
+
+describe("AuctionFlow — remaining screens", () => {
+  it("moves from lead to the pay screen with the remaining balance", () => {
+    render(<AuctionFlow />);
+    fireEvent.click(screen.getByText("Displace"));
+    fireEvent.click(screen.getByText("Continue with Google"));
+    fireEvent.change(screen.getByLabelText(/your bid/i), { target: { value: "10000" } });
+    fireEvent.click(screen.getByText("Place deposit"));
+    fireEvent.click(screen.getByText(/continue/i));
+    expect(screen.getByText("Remaining balance due")).toBeInTheDocument();
+    expect(screen.getByText("$9,000")).toBeInTheDocument(); // 10,000 - 1,000 deposit
+  });
+
+  it("moves from pay to the upload screen, gating submit on consent", () => {
+    render(<AuctionFlow />);
+    fireEvent.click(screen.getByText("Displace"));
+    fireEvent.click(screen.getByText("Continue with Google"));
+    fireEvent.change(screen.getByLabelText(/your bid/i), { target: { value: "10000" } });
+    fireEvent.click(screen.getByText("Place deposit"));
+    fireEvent.click(screen.getByText(/continue/i));
+    fireEvent.click(screen.getByText(/^Pay /));
+    expect(screen.getByText("Send your face")).toBeInTheDocument();
+    const submit = screen.getByText("Submit");
+    expect(submit).toBeDisabled();
+    fireEvent.click(screen.getByText(/I agree to have my photo published/));
+    expect(submit).not.toBeDisabled();
+  });
+
+  it("moves from upload to the pending screen on submit", () => {
+    render(<AuctionFlow />);
+    fireEvent.click(screen.getByText("Displace"));
+    fireEvent.click(screen.getByText("Continue with Google"));
+    fireEvent.change(screen.getByLabelText(/your bid/i), { target: { value: "10000" } });
+    fireEvent.click(screen.getByText("Place deposit"));
+    fireEvent.click(screen.getByText(/continue/i));
+    fireEvent.click(screen.getByText(/^Pay /));
+    fireEvent.click(screen.getByText(/I agree to have my photo published/));
+    fireEvent.click(screen.getByText("Submit"));
+    expect(screen.getByText("The scene is updating")).toBeInTheDocument();
+  });
+
+  it("shows the missed-payment screen with forfeiture details", () => {
+    render(<AuctionFlow initialScreen="missed" />);
+    expect(screen.getByText("The seat moved to the next in line")).toBeInTheDocument();
+    expect(screen.getByText(/forfeited/)).toBeInTheDocument();
+    expect(screen.getByText(/3-round pause/)).toBeInTheDocument();
+  });
+
+  it("opens the leaderboard from the closed screen and lists every mock row", () => {
+    render(<AuctionFlow />);
+    fireEvent.click(screen.getByText("Leaderboard"));
+    expect(screen.getByText("Who held the seat the longest")).toBeInTheDocument();
+    for (const row of [
+      "Mark Vilensky",
+      "Osei Adjei",
+      "Daniel Crowe",
+      "Felix Lang",
+      "Y. Kimura",
+      "Arthur Lemeshev",
+      "Timur Aslanov",
+      "Paul Renier",
+    ]) {
+      expect(screen.getByText(row)).toBeInTheDocument();
+    }
+  });
+});
