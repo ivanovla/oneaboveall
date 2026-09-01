@@ -1,0 +1,378 @@
+---
+import type { Scene } from "../lib/types";
+import { formatMoney } from "../lib/format";
+
+interface Props {
+  scene: Scene;
+}
+
+const { scene } = Astro.props;
+
+// Position (left%/top%) and rank badge for each of the 9 dots, transcribed
+// verbatim from the prototype's `PEOPLE` array
+// (design/prototype/one-above-all.dc.html lines 269-278). `Person` (Task 4)
+// only carries domain data — where a dot sits on the scene image and how
+// its tooltip is badged is presentation-only and has no home there, so it
+// lives here, indexed the same way `scene.champion` + `scene.retinue` are
+// ordered (champion first, then Retinue #1..#8).
+const POSITIONS: { left: number; top: number; rank: string }[] = [
+  { left: 50.4, top: 18.4, rank: "Champion" },
+  { left: 17.5, top: 38.2, rank: "Retinue #1" },
+  { left: 28.5, top: 39.8, rank: "#2" },
+  { left: 72.0, top: 40.0, rank: "#3" },
+  { left: 82.7, top: 41.4, rank: "#4" },
+  { left: 20.6, top: 57.6, rank: "#5" },
+  { left: 35.7, top: 58.8, rank: "#6" },
+  { left: 65.0, top: 60.0, rank: "#7" },
+  { left: 79.0, top: 57.6, rank: "#8" },
+];
+
+const people = [scene.champion, ...scene.retinue];
+
+// The prototype's tooltip `period` copy is decorative demo text that isn't
+// self-consistent with its own "held" durations (see mockData.ts's comment
+// on `championSince`). Here the period line is derived from the real
+// `since` timestamp instead, formatted deterministically in UTC.
+const periodDateTimeFormatter = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  timeZone: "UTC",
+});
+const periodDateFormatter = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  day: "numeric",
+  timeZone: "UTC",
+});
+
+const hotspots = people.map((person, i) => {
+  const pos = POSITIONS[i];
+  const isChampion = i === 0;
+  const period = isChampion
+    ? `At the head of the table since ${periodDateTimeFormatter.format(person.since)}`
+    : `Held the seat on ${periodDateFormatter.format(person.since)}`;
+  return {
+    occupantId: person.occupantId,
+    name: person.name,
+    rank: pos.rank,
+    left: pos.left,
+    top: pos.top,
+    // Tooltip horizontal position clamped 14%-86% so it never runs off the
+    // edge of the scene box; vertical position offset +5% below the dot.
+    tooltipLeft: Math.min(86, Math.max(14, pos.left)),
+    tooltipTop: pos.top + 5,
+    period,
+    sinceIso: person.since.toISOString(),
+    isChampion,
+    heldLabel: person.heldLabel,
+    paid: formatMoney(person.priceCents),
+    instagramUrl: person.instagramUrl ?? "",
+  };
+});
+---
+
+<div class="scene">
+  <div class="scene__box">
+    <img src="/scene.png" alt="" class="scene__image" />
+    <div class="scene__vignette"></div>
+    <div class="scene__shade"></div>
+
+    {
+      hotspots.map((h) => (
+        <div class="scene__dot-wrap" style={`left:${h.left}%;top:${h.top}%`}>
+          <button
+            type="button"
+            class="scene__dot"
+            aria-label={h.name}
+            data-occupant-id={h.occupantId}
+            data-name={h.name}
+            data-rank={h.rank}
+            data-period={h.period}
+            data-since={h.sinceIso}
+            data-is-champion={h.isChampion ? "true" : "false"}
+            data-held-label={h.heldLabel}
+            data-paid={h.paid}
+            data-instagram={h.instagramUrl}
+            data-tooltip-left={h.tooltipLeft}
+            data-tooltip-top={h.tooltipTop}
+          />
+        </div>
+      ))
+    }
+
+    <div class="scene__tip" id="scene-tip" hidden>
+      <div class="scene__tip-head">
+        <div class="scene__tip-name" id="scene-tip-name"></div>
+        <div class="scene__tip-rank" id="scene-tip-rank"></div>
+      </div>
+      <div class="scene__tip-period" id="scene-tip-period"></div>
+      <div class="scene__tip-stats">
+        <div>
+          <div class="scene__tip-label">Held</div>
+          <div class="scene__tip-value" id="scene-tip-held"></div>
+        </div>
+        <div>
+          <div class="scene__tip-label">Paid</div>
+          <div class="scene__tip-value" id="scene-tip-paid"></div>
+        </div>
+      </div>
+      <a
+        href="#"
+        target="_blank"
+        rel="noopener"
+        class="scene__tip-link"
+        id="scene-tip-link"
+      >
+        Instagram →
+      </a>
+    </div>
+  </div>
+</div>
+
+<style>
+  .scene {
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+    background: var(--void);
+    color: var(--fg);
+  }
+
+  .scene__image,
+  .scene__vignette,
+  .scene__shade {
+    position: absolute;
+    inset: 0;
+  }
+
+  .scene__box {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 100vw;
+    aspect-ratio: 16 / 9;
+    min-height: 56.25vw;
+  }
+
+  .scene__image {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .scene__vignette {
+    background: radial-gradient(
+      120% 90% at 50% 22%,
+      rgba(0, 0, 0, 0) 30%,
+      rgba(4, 3, 1, 0.55) 100%
+    );
+    pointer-events: none;
+  }
+
+  .scene__shade {
+    background: var(--void);
+    opacity: calc(var(--shade, 0) * 0.46);
+    mix-blend-mode: screen;
+    pointer-events: none;
+  }
+
+  .scene__dot-wrap {
+    position: absolute;
+    transform: translate(-50%, -50%);
+  }
+
+  .scene__dot {
+    width: 5.4vw;
+    height: 5.4vw;
+    min-width: 44px;
+    min-height: 44px;
+    border-radius: 50%;
+    border: 1px solid transparent;
+    transition:
+      border-color 0.25s,
+      box-shadow 0.25s;
+  }
+
+  .scene__dot:hover,
+  .scene__dot:focus-visible,
+  .scene__dot.is-active {
+    border-color: var(--gold-soft);
+    box-shadow: 0 0 34px rgba(201, 164, 92, 0.18) inset;
+  }
+
+  .scene__tip {
+    position: absolute;
+    transform: translate(-50%, 0);
+    width: min(72vw, 264px);
+    padding: 14px 16px 15px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    backdrop-filter: blur(14px);
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+    animation: fade 0.18s ease both;
+    z-index: 5;
+    pointer-events: none;
+  }
+
+  .scene__tip[hidden] {
+    display: none;
+  }
+
+  .scene__tip-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+  }
+
+  .scene__tip-name {
+    font-family: "Cormorant Garamond", Georgia, serif;
+    font-size: 21px;
+    line-height: 1.1;
+  }
+
+  .scene__tip-rank {
+    font-size: 9px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--gold);
+    white-space: nowrap;
+  }
+
+  .scene__tip-period {
+    margin-top: 8px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--fg-dim);
+  }
+
+  .scene__tip-stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-top: 12px;
+    padding-top: 11px;
+    border-top: 1px solid var(--line);
+  }
+
+  .scene__tip-label {
+    font-size: 9px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-faint);
+  }
+
+  .scene__tip-value {
+    font-size: 13px;
+    margin-top: 3px;
+  }
+
+  .scene__tip-link {
+    display: block;
+    margin-top: 12px;
+    padding-top: 11px;
+    border-top: 1px solid var(--line);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--gold);
+    pointer-events: auto;
+  }
+</style>
+
+<script>
+  function formatHeldDuration(sinceIso: string): string {
+    const since = new Date(sinceIso).getTime();
+    const ms = Math.max(0, Date.now() - since);
+    const totalMinutes = Math.floor(ms / 60000);
+    const days = Math.floor(totalMinutes / (60 * 24));
+    const hours = Math.floor((totalMinutes % (60 * 24)) / 60);
+    const minutes = totalMinutes % 60;
+    if (days > 0) return `${days}d ${hours}h`;
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    return `${minutes}m`;
+  }
+
+  function initScene() {
+    const scene = document.querySelector<HTMLElement>(".scene");
+    if (!scene) return;
+
+    const dots = Array.from(
+      scene.querySelectorAll<HTMLButtonElement>(".scene__dot"),
+    );
+    const tipMaybeNull = scene.querySelector<HTMLElement>("#scene-tip");
+    if (!tipMaybeNull) return;
+    const tip = tipMaybeNull;
+
+    const nameEl = tip.querySelector<HTMLElement>("#scene-tip-name")!;
+    const rankEl = tip.querySelector<HTMLElement>("#scene-tip-rank")!;
+    const periodEl = tip.querySelector<HTMLElement>("#scene-tip-period")!;
+    const heldEl = tip.querySelector<HTMLElement>("#scene-tip-held")!;
+    const paidEl = tip.querySelector<HTMLElement>("#scene-tip-paid")!;
+    const linkEl = tip.querySelector<HTMLAnchorElement>("#scene-tip-link")!;
+
+    let activeDot: HTMLButtonElement | null = null;
+
+    function show(dot: HTMLButtonElement) {
+      if (activeDot && activeDot !== dot) {
+        activeDot.classList.remove("is-active");
+      }
+      activeDot = dot;
+      dot.classList.add("is-active");
+
+      const data = dot.dataset;
+      nameEl.textContent = data.name ?? "";
+      rankEl.textContent = data.rank ?? "";
+      periodEl.textContent = data.period ?? "";
+      heldEl.textContent =
+        data.isChampion === "true"
+          ? formatHeldDuration(data.since ?? "")
+          : (data.heldLabel ?? "");
+      paidEl.textContent = data.paid ?? "";
+
+      const instagram = data.instagram ?? "";
+      if (instagram) {
+        linkEl.href = instagram;
+        linkEl.style.display = "";
+      } else {
+        linkEl.style.display = "none";
+      }
+
+      tip.style.left = `${data.tooltipLeft ?? "50"}%`;
+      tip.style.top = `${data.tooltipTop ?? "50"}%`;
+      tip.hidden = false;
+    }
+
+    function hide(dot: HTMLButtonElement) {
+      if (activeDot === dot) {
+        dot.classList.remove("is-active");
+        activeDot = null;
+        tip.hidden = true;
+      }
+    }
+
+    for (const dot of dots) {
+      dot.addEventListener("mouseenter", () => show(dot));
+      dot.addEventListener("focus", () => show(dot));
+      dot.addEventListener("mouseleave", () => hide(dot));
+      dot.addEventListener("blur", () => hide(dot));
+      dot.addEventListener("click", (event) => {
+        event.preventDefault();
+        show(dot);
+      });
+    }
+
+    document.addEventListener("click", (event) => {
+      if (!activeDot) return;
+      const target = event.target as Node;
+      if (!scene.contains(target)) {
+        hide(activeDot);
+      }
+    });
+  }
+
+  initScene();
+</script>

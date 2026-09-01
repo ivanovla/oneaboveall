@@ -1,6 +1,8 @@
 ---
 import BaseLayout from "../layouts/BaseLayout.astro";
+import Scene from "../components/Scene.astro";
+import { mockScene } from "../lib/mockData";
 ---
 <BaseLayout title="oneabobeall">
-  <p>Layout OK</p>
+  <Scene scene={mockScene} />
 </BaseLayout>
