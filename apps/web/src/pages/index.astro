@@ -1,8 +1,10 @@
 ---
 import BaseLayout from "../layouts/BaseLayout.astro";
 import Scene from "../components/Scene.astro";
+import AuctionFlow from "../components/AuctionFlow";
 import { mockScene } from "../lib/mockData";
 ---
 <BaseLayout title="oneabobeall">
   <Scene scene={mockScene} />
+  <AuctionFlow client:idle />
 </BaseLayout>

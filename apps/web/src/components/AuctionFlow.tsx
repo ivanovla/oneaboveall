@@ -55,6 +55,7 @@ const overlayPanelStyle: React.CSSProperties = {
   background: "var(--panel)",
   border: "1px solid var(--line)",
   boxShadow: "0 40px 120px rgba(0,0,0,.6)",
+  animation: "rise .28s ease both",
 };
 
 const overlayHeaderStyle: React.CSSProperties = {
@@ -174,7 +175,17 @@ export default function AuctionFlow({ initialScreen = "closed" }: { initialScree
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
+      <div
+        style={{
+          position: "fixed",
+          top: 22,
+          right: 24,
+          display: "flex",
+          gap: 6,
+          alignItems: "center",
+          zIndex: 20,
+        }}
+      >
         <button
           onClick={() => setScreen("top")}
           style={{
@@ -192,11 +203,19 @@ export default function AuctionFlow({ initialScreen = "closed" }: { initialScree
       </div>
       <div
         style={{
+          position: "fixed",
+          left: 0,
+          right: 0,
+          bottom: 0,
+          padding: "150px 20px 34px",
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
           gap: 18,
+          zIndex: 15,
           color: "var(--on-scene)",
+          background:
+            "linear-gradient(to top, rgba(6,5,2,.86) 0%, rgba(6,5,2,.66) 42%, rgba(6,5,2,0) 100%)",
         }}
       >
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 7 }}>
@@ -243,6 +262,7 @@ export default function AuctionFlow({ initialScreen = "closed" }: { initialScree
               height: 5,
               borderRadius: "50%",
               background: "var(--gold)",
+              animation: "breathe 2.4s infinite",
             }}
           />
           <span>Bidding window closes in</span>
@@ -253,7 +273,7 @@ export default function AuctionFlow({ initialScreen = "closed" }: { initialScree
       </div>
 
       {screen === "auth" && (
-        <OverlayShell stepLabel="Sign in" onClose={closeOverlay}>
+        <OverlayShell stepLabel="Step 1 · Sign in" onClose={closeOverlay}>
           <div style={headingStyle}>Sign in to claim the seat</div>
           <div style={{ marginTop: 10, fontSize: 13, lineHeight: 1.6, color: "var(--fg-dim)" }}>
             One account, one bid per round.
@@ -299,7 +319,7 @@ export default function AuctionFlow({ initialScreen = "closed" }: { initialScree
       )}
 
       {screen === "bid" && (
-        <OverlayShell stepLabel="Bid" onClose={closeOverlay}>
+        <OverlayShell stepLabel="Step 2 · Bid" onClose={closeOverlay}>
           <div style={headingStyle}>Your bid</div>
           <div style={{ display: "flex", gap: 14, marginTop: 22 }}>
             <div style={boxStyle}>
@@ -371,9 +391,9 @@ export default function AuctionFlow({ initialScreen = "closed" }: { initialScree
                   padding: 14,
                   fontSize: 12,
                   border: "1px solid",
-                  borderColor: paymentProvider === "ru" ? "var(--gold-soft)" : "var(--line)",
-                  background: "var(--panel-2)",
-                  color: "var(--fg)",
+                  borderColor: paymentProvider === "ru" ? "var(--gold)" : "var(--line)",
+                  background: paymentProvider === "ru" ? "var(--gold)" : "var(--panel-2)",
+                  color: paymentProvider === "ru" ? "var(--btn-fg)" : "var(--fg)",
                 }}
               >
                 YooKassa · RU
@@ -385,9 +405,9 @@ export default function AuctionFlow({ initialScreen = "closed" }: { initialScree
                   padding: 14,
                   fontSize: 12,
                   border: "1px solid",
-                  borderColor: paymentProvider === "intl" ? "var(--gold-soft)" : "var(--line)",
-                  background: "var(--panel-2)",
-                  color: "var(--fg)",
+                  borderColor: paymentProvider === "intl" ? "var(--gold)" : "var(--line)",
+                  background: paymentProvider === "intl" ? "var(--gold)" : "var(--panel-2)",
+                  color: paymentProvider === "intl" ? "var(--btn-fg)" : "var(--fg)",
                 }}
               >
                 Stripe · Intl
@@ -408,7 +428,7 @@ export default function AuctionFlow({ initialScreen = "closed" }: { initialScree
       )}
 
       {screen === "lead" && (
-        <OverlayShell stepLabel="You're in line" onClose={closeOverlay}>
+        <OverlayShell stepLabel="Step 3 · Queue" onClose={closeOverlay}>
           <div
             style={{
               fontSize: 9,
@@ -430,7 +450,8 @@ export default function AuctionFlow({ initialScreen = "closed" }: { initialScree
             Bid {formatMoney(bidCents)} accepted
           </div>
           <div style={{ marginTop: 12, fontSize: 13, lineHeight: 1.65, color: "var(--fg-dim)" }}>
-            The seat is yours if no one outbids you before the window closes.
+            The seat is yours if no one outbids you before the window closes. Queue snapshot at 9:00
+            PM MSK.
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 22 }}>
             <div style={boxStyle}>
@@ -472,7 +493,7 @@ export default function AuctionFlow({ initialScreen = "closed" }: { initialScree
       )}
 
       {screen === "pay" && (
-        <OverlayShell stepLabel="Balance" onClose={closeOverlay}>
+        <OverlayShell stepLabel="Step 4 · Balance" onClose={closeOverlay}>
           <div
             style={{
               fontSize: 9,
@@ -534,7 +555,7 @@ export default function AuctionFlow({ initialScreen = "closed" }: { initialScree
       )}
 
       {screen === "upload" && (
-        <OverlayShell stepLabel="Photo" onClose={closeOverlay}>
+        <OverlayShell stepLabel="Step 5 · Photo" onClose={closeOverlay}>
           <div
             style={{
               fontSize: 9,
@@ -642,7 +663,7 @@ export default function AuctionFlow({ initialScreen = "closed" }: { initialScree
       )}
 
       {screen === "pending" && (
-        <OverlayShell stepLabel="Waiting" onClose={closeOverlay}>
+        <OverlayShell stepLabel="Step 6 · Waiting" onClose={closeOverlay}>
           <div style={{ padding: "24px 0 20px", textAlign: "center" }}>
             <div
               style={{
@@ -651,6 +672,7 @@ export default function AuctionFlow({ initialScreen = "closed" }: { initialScree
                 borderRadius: "50%",
                 background: "var(--gold)",
                 margin: "0 auto",
+                animation: "breathe 2.2s infinite",
               }}
             />
             <div style={{ ...headingStyle, fontSize: 34, marginTop: 22 }}>The scene is updating</div>
@@ -752,7 +774,14 @@ export default function AuctionFlow({ initialScreen = "closed" }: { initialScree
             overflow: "auto",
           }}
         >
-          <div style={{ maxWidth: 760, margin: "0 auto", padding: "clamp(28px, 7vh, 72px) 22px 80px" }}>
+          <div
+            style={{
+              maxWidth: 760,
+              margin: "0 auto",
+              padding: "clamp(28px, 7vh, 72px) 22px 80px",
+              animation: "rise .3s ease both",
+            }}
+          >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 20 }}>
               <div>
                 <div style={{ fontSize: 9, letterSpacing: ".3em", textTransform: "uppercase", color: "var(--gold)" }}>
