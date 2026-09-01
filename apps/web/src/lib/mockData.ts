@@ -8,31 +8,51 @@ import type { Scene, Person, LeaderboardRow } from "./types";
 // The prototype has no notion of a build-time-fixed "now" — its countdown
 // runs off `Date.now()` in the browser and its "held"/"period" strings are
 // just static demo copy. To make this mock data deterministic we fix a
-// single reference "now" and derive every date from it:
-const REFERENCE_NOW = new Date("2026-08-09T14:20:00Z");
+// single reference "now" and derive every date from it.
+//
+// Think of `mockReferenceNow` as the instant this whole frozen snapshot was
+// taken: every other date here (reign starts, window close times) is an
+// offset from it, and every consumer measures durations against it rather
+// than against the real wall clock. That is what keeps the numbers on screen
+// stable — a snapshot anchored to `Date.now()` goes stale within hours and
+// then renders `00:00:00` forever (which is exactly what the previous
+// 2026-08-09 anchor had already decayed into).
+//
+// The date itself is deliberately ~9 months past the branch's own authoring
+// date: nothing in the UI ever prints a year (the tooltip formatters emit
+// "Jun 1, 2:20 PM"), so a future anchor is indistinguishable on screen, but
+// it keeps any date-sensitive reading — including a hypothetical future
+// consumer that *does* compare against the real clock — pointing forward for
+// a full review/merge cycle rather than backwards.
+export const mockReferenceNow = new Date("2027-06-01T14:20:00Z");
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const ONE_HOUR_MS = 60 * 60 * 1000;
+const ONE_MINUTE_MS = 60 * 1000;
+const ONE_SECOND_MS = 1000;
 
-// The champion's reign is still ongoing, so its "time held" must be
-// computed live client-side as `now - since` (see types.ts). For the mock
-// data to render that computation as "1d 4h" — the prototype's demo
-// held value for Mark Vilensky — `since` is derived by subtracting that
-// duration from REFERENCE_NOW, rather than parsing the prototype's
-// decorative "since Aug 9, 2:20 PM" period string (which isn't
-// self-consistent with a 1d4h-old reign anyway).
-const championSince = new Date(REFERENCE_NOW.getTime() - (1 * ONE_DAY_MS + 4 * ONE_HOUR_MS));
+// The champion's reign is still ongoing, so its "time held" keeps ticking up
+// (see types.ts). For it to render as "1d 4h" — the prototype's demo held
+// value for Mark Vilensky — `since` is derived by subtracting that duration
+// from `mockReferenceNow`, rather than parsing the prototype's decorative
+// "since Aug 9, 2:20 PM" period string (which isn't self-consistent with a
+// 1d4h-old reign anyway).
+const championSince = new Date(
+  mockReferenceNow.getTime() - (1 * ONE_DAY_MS + 4 * ONE_HOUR_MS),
+);
 
 // Retinue members' reigns have already ended, so their "since" is just a
 // historical start date (used for the "since"/period line) and never
-// recomputed against REFERENCE_NOW. The prototype's `period` field only
-// gives a day ("Held the seat on Aug 8"), not a time, so each retinue
-// `since` reuses the champion's time-of-day (14:20 UTC) for a plausible,
-// consistent-looking timestamp. Year 2026 is assumed throughout, matching
-// REFERENCE_NOW. `heldLabel` is transcribed verbatim from the prototype's
-// `held` field ("1d" for every retinue entry in PEOPLE).
-function retinueSince(augustDay: number): Date {
-  return new Date(Date.UTC(2026, 7, augustDay, 14, 20, 0));
+// recomputed. The prototype's `period` field only gives a day ("Held the
+// seat on Aug 8"), not a time, so each retinue `since` is a whole number of
+// days before `mockReferenceNow` — which reuses its 14:20 UTC time-of-day
+// and, unlike the previous hard-coded August 2026 dates, stays consistent
+// with the reference anchor whenever that anchor moves. `daysAgo` 1-8 maps
+// onto the prototype's Aug 8 … Aug 1 relative to its own Aug 9 "now".
+// `heldLabel` is transcribed verbatim from the prototype's `held` field
+// ("1d" for every retinue entry in PEOPLE).
+function retinueSince(daysAgo: number): Date {
+  return new Date(mockReferenceNow.getTime() - daysAgo * ONE_DAY_MS);
 }
 
 const INSTAGRAM_URL = "https://instagram.com";
@@ -51,7 +71,7 @@ const retinue: Person[] = [
     occupantId: "daniel-crowe",
     name: "Daniel Crowe", // Retinue #1
     priceCents: 398_000, // "$3,980"
-    since: retinueSince(8),
+    since: retinueSince(1),
     heldLabel: "1d",
     instagramUrl: INSTAGRAM_URL,
   },
@@ -59,7 +79,7 @@ const retinue: Person[] = [
     occupantId: "osei-adjei",
     name: "Osei Adjei", // Retinue #2
     priceCents: 364_000, // "$3,640"
-    since: retinueSince(7),
+    since: retinueSince(2),
     heldLabel: "1d",
     instagramUrl: INSTAGRAM_URL,
   },
@@ -67,7 +87,7 @@ const retinue: Person[] = [
     occupantId: "arthur-lemeshev",
     name: "Arthur Lemeshev", // Retinue #3
     priceCents: 310_000, // "$3,100"
-    since: retinueSince(6),
+    since: retinueSince(3),
     heldLabel: "1d",
     instagramUrl: INSTAGRAM_URL,
   },
@@ -75,7 +95,7 @@ const retinue: Person[] = [
     occupantId: "ivan-dorn",
     name: "Ivan Dorn", // Retinue #4
     priceCents: 287_000, // "$2,870"
-    since: retinueSince(5),
+    since: retinueSince(4),
     heldLabel: "1d",
     instagramUrl: INSTAGRAM_URL,
   },
@@ -83,7 +103,7 @@ const retinue: Person[] = [
     occupantId: "felix-lang",
     name: "Felix Lang", // Retinue #5
     priceCents: 240_000, // "$2,400"
-    since: retinueSince(4),
+    since: retinueSince(5),
     heldLabel: "1d",
     instagramUrl: INSTAGRAM_URL,
   },
@@ -91,7 +111,7 @@ const retinue: Person[] = [
     occupantId: "y-kimura",
     name: "Y. Kimura", // Retinue #6
     priceCents: 215_000, // "$2,150"
-    since: retinueSince(3),
+    since: retinueSince(6),
     heldLabel: "1d",
     instagramUrl: INSTAGRAM_URL,
   },
@@ -99,7 +119,7 @@ const retinue: Person[] = [
     occupantId: "timur-aslanov",
     name: "Timur Aslanov", // Retinue #7
     priceCents: 198_000, // "$1,980"
-    since: retinueSince(2),
+    since: retinueSince(7),
     heldLabel: "1d",
     instagramUrl: INSTAGRAM_URL,
   },
@@ -107,7 +127,7 @@ const retinue: Person[] = [
     occupantId: "paul-renier",
     name: "Paul Renier", // Retinue #8
     priceCents: 172_000, // "$1,720"
-    since: retinueSince(1),
+    since: retinueSince(8),
     heldLabel: "1d",
     instagramUrl: INSTAGRAM_URL,
   },
@@ -180,6 +200,20 @@ export const mockLeaderboard: LeaderboardRow[] = [
 
 export const mockCurrentPriceCents = 421_000; // matches the champion's priceCents
 
+// Both window-close timestamps are derived from `mockReferenceNow` rather
+// than hard-coded, so bumping the anchor moves them with it and the two
+// countdowns can never silently decay to `00:00:00` again.
+
 // Matches the prototype's demo countdown of 6h41m12s
-// (state.left = 6*3600 + 41*60 + 12) measured from REFERENCE_NOW.
-export const mockBiddingWindowClosesAt = new Date("2026-08-09T21:01:12Z");
+// (state.left = 6*3600 + 41*60 + 12) measured from the reference "now".
+export const mockBiddingWindowClosesAt = new Date(
+  mockReferenceNow.getTime() + 6 * ONE_HOUR_MS + 41 * ONE_MINUTE_MS + 12 * ONE_SECOND_MS,
+);
+
+// Matches the prototype's demo payment countdown of 3h12m
+// (state.payLeft = 3*3600 + 12*60) measured from the reference "now".
+// Previously the pay screen invented its own window from `Date.now()` at
+// mount; it now reads from the same frozen snapshot as everything else.
+export const mockPaymentWindowClosesAt = new Date(
+  mockReferenceNow.getTime() + 3 * ONE_HOUR_MS + 12 * ONE_MINUTE_MS,
+);

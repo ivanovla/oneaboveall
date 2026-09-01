@@ -18,6 +18,22 @@ const { title } = Astro.props;
       href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500;600&family=Manrope:wght@300;400;500;600;700&display=swap"
       rel="stylesheet"
     />
+    <!--
+      Applies a previously chosen theme before first paint, so a returning
+      light-theme visitor never sees a flash of the dark palette. `is:inline`
+      keeps it a blocking inline script in <head> rather than a bundled,
+      deferred module. The storage key must match THEME_STORAGE_KEY in
+      components/AuctionFlow.tsx, which owns the toggle itself.
+    -->
+    <script is:inline>
+      try {
+        if (localStorage.getItem("oneabobeall:theme") === "light") {
+          document.documentElement.dataset.theme = "light";
+        }
+      } catch (e) {
+        /* storage unavailable — fall back to the default dark theme */
+      }
+    </script>
   </head>
   <body>
     <slot />

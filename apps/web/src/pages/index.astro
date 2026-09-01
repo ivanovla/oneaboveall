@@ -2,9 +2,9 @@
 import BaseLayout from "../layouts/BaseLayout.astro";
 import Scene from "../components/Scene.astro";
 import AuctionFlow from "../components/AuctionFlow";
-import { mockScene } from "../lib/mockData";
+import { mockScene, mockReferenceNow } from "../lib/mockData";
 ---
 <BaseLayout title="oneabobeall">
-  <Scene scene={mockScene} />
+  <Scene scene={mockScene} referenceNow={mockReferenceNow} />
   <AuctionFlow client:idle />
 </BaseLayout>

@@ -10,6 +10,10 @@
   --line: rgba(201, 164, 92, .22);
   --scrim: rgba(5, 4, 2, .72);
   --btn-fg: #100c06;
+  /* 0 in dark, 1 in light: multiplied into the scene's screen-blended shade
+     layer (see Scene.astro's .scene__shade) to lift the photograph in the
+     light theme. */
+  --shade: 0;
   --on-scene: #f4ecdd;
   --on-scene-dim: rgba(244, 236, 221, .6);
   --on-scene-faint: rgba(244, 236, 221, .42);
@@ -28,6 +32,7 @@
   --line: rgba(125, 92, 34, .24);
   --scrim: rgba(238, 232, 221, .7);
   --btn-fg: #faf6ee;
+  --shade: 1;
 }
 
 * { box-sizing: border-box; -webkit-font-smoothing: antialiased; }

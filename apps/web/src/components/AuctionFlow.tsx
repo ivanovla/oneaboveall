@@ -1,16 +1,48 @@
 import { useEffect, useState } from "react";
 import { formatMoney, formatCountdown, calculateDepositDisplay } from "../lib/format";
-import { mockCurrentPriceCents, mockBiddingWindowClosesAt, mockLeaderboard } from "../lib/mockData";
+import {
+  mockCurrentPriceCents,
+  mockBiddingWindowClosesAt,
+  mockPaymentWindowClosesAt,
+  mockReferenceNow,
+  mockLeaderboard,
+} from "../lib/mockData";
 
-// The payment window has no backing mock timestamp (there is no server-side
-// "pay by" concept in the mock data this task consumes). It's fixed relative
-// to component mount, mirroring the prototype's static 3h12m demo countdown.
-const PAYMENT_WINDOW_MS = 3 * 60 * 60 * 1000 + 12 * 60 * 1000;
-
-// A one-dollar step above the current price, used only to render the "Minimum"
-// figure on the bid screen. Purely cosmetic — there is no server-side minimum
-// bid concept in the mock data this task consumes.
+// A one-dollar step above the current price. Renders the "Minimum" figure on
+// the bid screen, seeds the input's prefilled value, and acts as the floor
+// every derived bid figure is clamped to. Purely cosmetic — there is no
+// server-side minimum bid concept in the mock data this task consumes.
 const MIN_BID_INCREMENT_CENTS = 100;
+const MIN_BID_CENTS = mockCurrentPriceCents + MIN_BID_INCREMENT_CENTS;
+
+// The raw string shown in the bid input on first paint: one increment above
+// the current price, matching the prototype's initial `bid: 4211` demo value.
+const INITIAL_BID_VALUE = String(Math.round(MIN_BID_CENTS / 100));
+
+/**
+ * Turns the raw, unsanitised string the user typed into a usable cents figure.
+ *
+ * Mirrors the prototype's
+ *   `Math.max(s.current + 1, Number(String(s.bid).replace(/[^\d]/g, "")) || 0)`
+ * (design/prototype/one-above-all.dc.html ~line 316), adapted to this app's
+ * "dollars in the input, converted to cents exactly once" convention.
+ *
+ * The input sits directly beneath a comma-formatted "$4,210", so typing
+ * "4,300" is the natural thing to do — without stripping separators that fed
+ * `Number("4,300") === NaN` straight into four downstream screens as "$NaN".
+ * Every non-digit is dropped (commas, spaces, "$", stray letters), an empty
+ * or unparseable result falls back to 0, and the figure is finally floored at
+ * the minimum bid so no screen can ever display a bid below what it takes to
+ * displace the champion.
+ */
+function parseBidCents(rawValue: string): number {
+  const digits = rawValue.replace(/[^\d]/g, "");
+  const dollars = digits === "" ? 0 : Number(digits);
+  // A long enough run of digits overflows to Infinity; treat that (and any
+  // other non-finite result) the same as "nothing usable was typed".
+  const cents = Number.isFinite(dollars) ? dollars * 100 : 0;
+  return Math.max(MIN_BID_CENTS, cents);
+}
 
 type Screen =
   | "closed"
@@ -25,15 +57,46 @@ type Screen =
 
 type PaymentProvider = "ru" | "intl";
 
+/**
+ * Renders `closesAt` as a live HH:MM:SS countdown.
+ *
+ * Two constraints shape this:
+ *
+ * 1. Hydration safety. This island is mounted with `client:idle`, so Astro
+ *    server-renders it at *build* time and the browser has to reproduce that
+ *    exact markup on hydration. Reading `Date.now()` during render (as
+ *    `useState(() => Date.now())` did) bakes the build machine's clock into
+ *    the static HTML, which the browser then contradicts — a React hydration
+ *    mismatch, plus a stale figure on screen until the idle callback fires.
+ *    So the first render is derived purely from fixed data, and the only
+ *    `Date.now()` reads happen inside the effect, which never runs on the
+ *    server.
+ *
+ * 2. A frozen mock snapshot. Remaining time is measured from
+ *    `mockReferenceNow`, not the real wall clock. The mock dataset is a
+ *    snapshot taken at that instant; comparing its fixed close time against
+ *    the real clock is what decayed the countdown to a permanent `00:00:00`
+ *    in the first place, and no fixed date can survive that comparison for
+ *    more than a few hours. Anchoring to the snapshot reproduces the
+ *    prototype's own behaviour exactly (it seeds `left` with a literal
+ *    6h41m12s and decrements it once a second) while keeping `closesAt`
+ *    modelled the way a real API would hand it over — as a timestamp.
+ *
+ * The ticking is driven by elapsed real time since mount rather than by
+ * counting interval fires, so a throttled background tab resumes at the right
+ * value instead of drifting.
+ */
 function useCountdown(closesAt: Date): string {
-  const [now, setNow] = useState(() => Date.now());
+  const remainingAtSnapshotMs = closesAt.getTime() - mockReferenceNow.getTime();
+  const [elapsedSinceMountMs, setElapsedSinceMountMs] = useState(0);
 
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
+    const mountedAt = Date.now();
+    const id = setInterval(() => setElapsedSinceMountMs(Date.now() - mountedAt), 1000);
     return () => clearInterval(id);
   }, []);
 
-  return formatCountdown(closesAt.getTime() - now);
+  return formatCountdown(remainingAtSnapshotMs - elapsedSinceMountMs);
 }
 
 const overlayShellStyle: React.CSSProperties = {
@@ -70,10 +133,28 @@ const overlayBodyStyle: React.CSSProperties = {
   padding: "28px 26px 30px",
 };
 
+// One heading style for every overlay screen (auth/bid/lead/pay/upload/
+// pending/missed). The prototype itself drifted between 34px/1.08, 36px/1.06
+// and 34px/1.1 across those seven screens; 36px/1.06 is the value its three
+// most recent screens (lead/pay/upload) settled on, so it wins here rather
+// than the three ad-hoc sizes this file had grown.
 const headingStyle: React.CSSProperties = {
   fontFamily: "'Cormorant Garamond', Georgia, serif",
-  fontSize: 34,
-  lineHeight: 1.08,
+  fontSize: 36,
+  lineHeight: 1.06,
+};
+
+// The two fixed top-right chrome chips (theme toggle + Leaderboard), styled
+// identically in the prototype.
+const chromeButtonStyle: React.CSSProperties = {
+  padding: "8px 13px",
+  fontSize: 10,
+  letterSpacing: ".18em",
+  textTransform: "uppercase",
+  color: "var(--on-scene-dim)",
+  border: "1px solid var(--line)",
+  background: "var(--scene-chip)",
+  backdropFilter: "blur(8px)",
 };
 
 const fieldLabelStyle: React.CSSProperties = {
@@ -101,6 +182,47 @@ const primaryButtonStyle: React.CSSProperties = {
   letterSpacing: ".34em",
   textTransform: "uppercase",
 };
+
+// Keep in sync with the pre-paint theme script in layouts/BaseLayout.astro,
+// which reads the same key before this island ever hydrates.
+const THEME_STORAGE_KEY = "oneabobeall:theme";
+
+/**
+ * Drives the `data-theme` attribute on <html>, which tokens.css keys its
+ * light palette (and the scene's `--shade` blend) off.
+ *
+ * `document` is deliberately never touched during render: this island is
+ * server-rendered at build time, so the first client render has to match the
+ * static HTML. The button label is seeded with the dark-theme default (it
+ * names the theme it would switch *to*, as in the prototype) and corrected in
+ * an effect once the real, possibly persisted, theme is known.
+ */
+function useThemeToggle(): { label: string; toggle: () => void } {
+  const [isLight, setIsLight] = useState(false);
+
+  useEffect(() => {
+    setIsLight(document.documentElement.dataset.theme === "light");
+  }, []);
+
+  function toggle() {
+    const root = document.documentElement;
+    const nextIsLight = root.dataset.theme !== "light";
+    if (nextIsLight) {
+      root.dataset.theme = "light";
+    } else {
+      delete root.dataset.theme;
+    }
+    setIsLight(nextIsLight);
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, nextIsLight ? "light" : "dark");
+    } catch {
+      // Storage can be unavailable (private mode, blocked cookies). The
+      // toggle still works for this page view; it just won't be remembered.
+    }
+  }
+
+  return { label: isLight ? "Dark" : "Light", toggle };
+}
 
 function OverlayShell({
   stepLabel,
@@ -145,21 +267,24 @@ function OverlayShell({
 
 export default function AuctionFlow({ initialScreen = "closed" }: { initialScreen?: Screen } = {}) {
   const [screen, setScreen] = useState<Screen>(initialScreen);
-  const [bidValue, setBidValue] = useState("");
+  const [bidValue, setBidValue] = useState(INITIAL_BID_VALUE);
   const [paymentProvider, setPaymentProvider] = useState<PaymentProvider>("ru");
   const [consent, setConsent] = useState(false);
-  const [paymentWindowClosesAt] = useState(() => new Date(Date.now() + PAYMENT_WINDOW_MS));
+  const theme = useThemeToggle();
 
   const clock = useCountdown(mockBiddingWindowClosesAt);
-  const payClock = useCountdown(paymentWindowClosesAt);
+  const payClock = useCountdown(mockPaymentWindowClosesAt);
 
   const priceLabel = formatMoney(mockCurrentPriceCents);
-  const minBidLabel = formatMoney(mockCurrentPriceCents + MIN_BID_INCREMENT_CENTS);
+  const minBidLabel = formatMoney(MIN_BID_CENTS);
 
-  // The bid input holds a whole-dollar figure exactly as the user typed it
-  // (matching the prototype's `s.bid` convention). It is converted to cents
-  // exactly once, here, and every downstream computation works in cents.
-  const bidCents = Number(bidValue) * 100;
+  // `bidValue` is the raw string the user typed, and stays that way — the
+  // <input> below shows it back verbatim, separators and all. Every *derived*
+  // figure goes through `parseBidCents` instead, which sanitises and floors
+  // it, so the deposit / lead / pay / missed screens can never render "$NaN"
+  // or a sub-minimum bid no matter what was typed. Cents conversion happens
+  // exactly once, here; every downstream computation works in cents.
+  const bidCents = parseBidCents(bidValue);
   const depositCents = calculateDepositDisplay(bidCents);
   // Same bidCents/depositCents carried over from the bid screen — no re-parsing.
   const remainderCents = bidCents - depositCents;
@@ -168,6 +293,11 @@ export default function AuctionFlow({ initialScreen = "closed" }: { initialScree
     paymentProvider === "ru"
       ? "YooKassa · charged in rubles at the CBR rate"
       : "Stripe · charged in US dollars";
+
+  const geoNote =
+    paymentProvider === "ru"
+      ? "IP detected as Russian — YooKassa selected. You can switch manually."
+      : "Visa / Mastercard, charged in US dollars.";
 
   function closeOverlay() {
     setScreen("closed");
@@ -186,18 +316,10 @@ export default function AuctionFlow({ initialScreen = "closed" }: { initialScree
           zIndex: 20,
         }}
       >
-        <button
-          onClick={() => setScreen("top")}
-          style={{
-            padding: "8px 13px",
-            fontSize: 10,
-            letterSpacing: ".18em",
-            textTransform: "uppercase",
-            color: "var(--on-scene-dim)",
-            border: "1px solid var(--line)",
-            background: "var(--scene-chip)",
-          }}
-        >
+        <button onClick={theme.toggle} style={chromeButtonStyle} aria-label={`Switch to ${theme.label.toLowerCase()} theme`}>
+          {theme.label}
+        </button>
+        <button onClick={() => setScreen("top")} style={chromeButtonStyle}>
           Leaderboard
         </button>
       </div>
@@ -413,9 +535,7 @@ export default function AuctionFlow({ initialScreen = "closed" }: { initialScree
                 Stripe · Intl
               </button>
             </div>
-            <div style={{ marginTop: 9, fontSize: 11, color: "var(--fg-faint)" }}>
-              RU cards use YooKassa; everyone else uses Stripe.
-            </div>
+            <div style={{ marginTop: 9, fontSize: 11, color: "var(--fg-faint)" }}>{geoNote}</div>
           </div>
           <button onClick={() => setScreen("lead")} style={primaryButtonStyle}>
             Place deposit
@@ -439,14 +559,7 @@ export default function AuctionFlow({ initialScreen = "closed" }: { initialScree
           >
             You're first in line
           </div>
-          <div
-            style={{
-              fontFamily: "'Cormorant Garamond', Georgia, serif",
-              fontSize: 36,
-              lineHeight: 1.06,
-              marginTop: 12,
-            }}
-          >
+          <div style={{ ...headingStyle, marginTop: 12 }}>
             Bid {formatMoney(bidCents)} accepted
           </div>
           <div style={{ marginTop: 12, fontSize: 13, lineHeight: 1.65, color: "var(--fg-dim)" }}>
@@ -675,7 +788,7 @@ export default function AuctionFlow({ initialScreen = "closed" }: { initialScree
                 animation: "breathe 2.2s infinite",
               }}
             />
-            <div style={{ ...headingStyle, fontSize: 34, marginTop: 22 }}>The scene is updating</div>
+            <div style={{ ...headingStyle, marginTop: 22 }}>The scene is updating</div>
             <div style={{ marginTop: 12, fontSize: 13, lineHeight: 1.7, color: "var(--fg-dim)" }}>
               The shot is being re-composed with you at the center. Usually takes a few minutes — feel
               free to close this page, we'll notify you.
@@ -710,7 +823,7 @@ export default function AuctionFlow({ initialScreen = "closed" }: { initialScree
           >
             Payment window closed
           </div>
-          <div style={{ ...headingStyle, fontSize: 34, marginTop: 12 }}>
+          <div style={{ ...headingStyle, marginTop: 12 }}>
             The seat moved to the next in line
           </div>
           <div style={{ marginTop: 12, fontSize: 13, lineHeight: 1.7, color: "var(--fg-dim)" }}>

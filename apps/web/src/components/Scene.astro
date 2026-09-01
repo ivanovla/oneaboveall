@@ -4,9 +4,17 @@ import { formatMoney } from "../lib/format";
 
 interface Props {
   scene: Scene;
+  // The instant `scene` was captured. The champion's reign is still running,
+  // so "time held" is measured from here — and, because the whole scene is
+  // rendered from a frozen snapshot rather than a live query, it has to be
+  // measured from the snapshot's own "now" rather than the browser's clock
+  // (comparing a fixed mock date against the real clock is what made this
+  // stat read as an absurd 24+ day reign). When a real API replaces the
+  // mock, the page passes `new Date()` here and nothing else changes.
+  referenceNow: Date;
 }
 
-const { scene } = Astro.props;
+const { scene, referenceNow } = Astro.props;
 
 // Position (left%/top%) and rank badge for each of the 9 dots, transcribed
 // verbatim from the prototype's `PEOPLE` array
@@ -66,17 +74,24 @@ const hotspots = people.map((person, i) => {
   const period = isChampion
     ? `At the head of the table since ${periodDateTimeFormatter.format(person.since)}`
     : `Held the seat on ${periodDateFormatter.format(person.since)}`;
+  // How long the champion had held the seat as of `referenceNow`. The client
+  // script adds the time the visitor has spent on the page on top, so the
+  // stat keeps ticking up while they watch without ever being anchored to the
+  // browser's clock. Retinue reigns are over and use `heldLabel` instead.
+  const heldBaseMs = isChampion
+    ? Math.max(0, referenceNow.getTime() - person.since.getTime())
+    : 0;
   return {
     name: person.name,
     rank: pos.rank,
     left: pos.left,
     top: pos.top,
+    heldBaseMs,
     // Tooltip horizontal position clamped 14%-86% so it never runs off the
     // edge of the scene box; vertical position offset +5% below the dot.
     tooltipLeft: Math.min(86, Math.max(14, pos.left)),
     tooltipTop: pos.top + 5,
     period,
-    sinceIso: person.since.toISOString(),
     isChampion,
     heldLabel: person.heldLabel,
     paid: formatMoney(person.priceCents),
@@ -101,7 +116,7 @@ const hotspots = people.map((person, i) => {
             data-name={h.name}
             data-rank={h.rank}
             data-period={h.period}
-            data-since={h.sinceIso}
+            data-held-base-ms={String(h.heldBaseMs)}
             data-is-champion={h.isChampion ? "true" : "false"}
             data-held-label={h.heldLabel}
             data-paid={h.paid}
@@ -129,12 +144,17 @@ const hotspots = people.map((person, i) => {
           <div class="scene__tip-value" id="scene-tip-paid"></div>
         </div>
       </div>
+      <!--
+        No initial href: the real one is installed by the script only after
+        the occupant's URL passes the http(s) check, so an unvalidated or
+        missing link is inert rather than pointing anywhere.
+      -->
       <a
-        href="#"
         target="_blank"
-        rel="noopener"
+        rel="noopener noreferrer"
         class="scene__tip-link"
         id="scene-tip-link"
+        style="display: none"
       >
         Instagram →
       </a>
@@ -296,9 +316,18 @@ const hotspots = people.map((person, i) => {
 </style>
 
 <script>
-  function formatHeldDuration(sinceIso: string): string {
-    const since = new Date(sinceIso).getTime();
-    const ms = Math.max(0, Date.now() - since);
+  // Captured once, when this script first runs. The champion's held time is
+  // "however long they had held it when the page was rendered, plus however
+  // long you have been looking at the page" — so it ticks up live without
+  // ever comparing a server-rendered timestamp against the browser's clock.
+  const PAGE_LOADED_AT = Date.now();
+
+  function formatHeldDuration(heldBaseMs: string): string {
+    const base = Number(heldBaseMs);
+    const ms = Math.max(
+      0,
+      (Number.isFinite(base) ? base : 0) + (Date.now() - PAGE_LOADED_AT),
+    );
     const totalMinutes = Math.floor(ms / 60000);
     const days = Math.floor(totalMinutes / (60 * 24));
     const hours = Math.floor((totalMinutes % (60 * 24)) / 60);
@@ -306,6 +335,17 @@ const hotspots = people.map((person, i) => {
     if (days > 0) return `${days}d ${hours}h`;
     if (hours > 0) return `${hours}h ${minutes}m`;
     return `${minutes}m`;
+  }
+
+  function isHttpUrl(value: string): boolean {
+    try {
+      const protocol = new URL(value).protocol;
+      return protocol === "https:" || protocol === "http:";
+    } catch {
+      // Not an absolute URL at all (relative path, empty, "javascript:x"
+      // without a parseable form, …) — reject it.
+      return false;
+    }
   }
 
   function initScene() {
@@ -341,15 +381,21 @@ const hotspots = people.map((person, i) => {
       periodEl.textContent = data.period ?? "";
       heldEl.textContent =
         data.isChampion === "true"
-          ? formatHeldDuration(data.since ?? "")
+          ? formatHeldDuration(data.heldBaseMs ?? "0")
           : (data.heldLabel ?? "");
       paidEl.textContent = data.paid ?? "";
 
       const instagram = data.instagram ?? "";
-      if (instagram) {
+      // Never assign an unvalidated string to `href`: today this is a
+      // hardcoded mock constant, but per docs/superpowers/specs/
+      // 2026-08-12-ui-reference.md it becomes a profile link the occupant
+      // supplies, and `javascript:...` in an href executes on click. Only
+      // http(s) URLs are ever installed; anything else hides the link.
+      if (isHttpUrl(instagram)) {
         linkEl.href = instagram;
         linkEl.style.display = "";
       } else {
+        linkEl.removeAttribute("href");
         linkEl.style.display = "none";
       }
 
