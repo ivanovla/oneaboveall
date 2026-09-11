@@ -12,13 +12,8 @@ import type { LeaderboardRow } from "../lib/types";
 // A one-dollar step above the current price. Renders the "Minimum" figure on
 // the bid screen, seeds the input's prefilled value, and acts as the floor
 // every derived bid figure is clamped to. Purely cosmetic — there is no
-// server-side minimum bid concept in the mock data this task consumes.
+// server-side minimum bid concept in the data this component consumes.
 const MIN_BID_INCREMENT_CENTS = 100;
-const MIN_BID_CENTS = mockCurrentPriceCents + MIN_BID_INCREMENT_CENTS;
-
-// The raw string shown in the bid input on first paint: one increment above
-// the current price, matching the prototype's initial `bid: 4211` demo value.
-const INITIAL_BID_VALUE = String(Math.round(MIN_BID_CENTS / 100));
 
 /**
  * Turns the raw, unsanitised string the user typed into a usable cents figure.
@@ -33,16 +28,16 @@ const INITIAL_BID_VALUE = String(Math.round(MIN_BID_CENTS / 100));
  * `Number("4,300") === NaN` straight into four downstream screens as "$NaN".
  * Every non-digit is dropped (commas, spaces, "$", stray letters), an empty
  * or unparseable result falls back to 0, and the figure is finally floored at
- * the minimum bid so no screen can ever display a bid below what it takes to
+ * `minBidCents` so no screen can ever display a bid below what it takes to
  * displace the champion.
  */
-function parseBidCents(rawValue: string): number {
+function parseBidCents(rawValue: string, minBidCents: number): number {
   const digits = rawValue.replace(/[^\d]/g, "");
   const dollars = digits === "" ? 0 : Number(digits);
   // A long enough run of digits overflows to Infinity; treat that (and any
   // other non-finite result) the same as "nothing usable was typed".
   const cents = Number.isFinite(dollars) ? dollars * 100 : 0;
-  return Math.max(MIN_BID_CENTS, cents);
+  return Math.max(minBidCents, cents);
 }
 
 type Screen =
@@ -269,18 +264,45 @@ function OverlayShell({
 export default function AuctionFlow({
   initialScreen = "closed",
   leaderboard = mockLeaderboard,
-}: { initialScreen?: Screen; leaderboard?: LeaderboardRow[] } = {}) {
+  // The price the seat currently costs — i.e. the reigning champion's
+  // priceCents. pages/index.astro passes the real, adapted champion's price
+  // here, so the headline figure above the Displace button is the same number
+  // the scene's own tooltip shows for the champion rendered right above it.
+  // Defaults to the mock constant so this component still renders standalone
+  // (tests, any caller with no live data) exactly as it did before.
+  currentPriceCents = mockCurrentPriceCents,
+}: {
+  initialScreen?: Screen;
+  leaderboard?: LeaderboardRow[];
+  currentPriceCents?: number;
+} = {}) {
+  const minBidCents = currentPriceCents + MIN_BID_INCREMENT_CENTS;
+
   const [screen, setScreen] = useState<Screen>(initialScreen);
-  const [bidValue, setBidValue] = useState(INITIAL_BID_VALUE);
+  // The raw string shown in the bid input on first paint: one increment above
+  // the current price (with the mock price, the prototype's `bid: 4211`).
+  // Derived purely from props, so the server-rendered HTML and the browser's
+  // first hydration render agree — see useCountdown's note on `client:idle`.
+  const [bidValue, setBidValue] = useState(() => String(Math.round(minBidCents / 100)));
   const [paymentProvider, setPaymentProvider] = useState<PaymentProvider>("ru");
   const [consent, setConsent] = useState(false);
   const theme = useThemeToggle();
 
+  // KNOWN GAP — deliberate, tracked. Unlike the price and the leaderboard,
+  // both countdowns are still driven by mock constants frozen at
+  // `mockReferenceNow`, even when everything else on the page is live. The
+  // API exposes only `getScene` / `getLeaderboard`; there is no round or
+  // offer state on it yet, so the real "bidding window closes at" and
+  // "payment window closes at" instants simply aren't available to fetch.
+  // Closing this needs a round-state API surface first, at which point these
+  // become props threaded from index.astro the same way `currentPriceCents`
+  // and `leaderboard` are. Until then the countdowns are demo figures, and
+  // the whole bid/pay flow below them is still a non-transacting mock.
   const clock = useCountdown(mockBiddingWindowClosesAt);
   const payClock = useCountdown(mockPaymentWindowClosesAt);
 
-  const priceLabel = formatMoney(mockCurrentPriceCents);
-  const minBidLabel = formatMoney(MIN_BID_CENTS);
+  const priceLabel = formatMoney(currentPriceCents);
+  const minBidLabel = formatMoney(minBidCents);
 
   // `bidValue` is the raw string the user typed, and stays that way — the
   // <input> below shows it back verbatim, separators and all. Every *derived*
@@ -288,7 +310,7 @@ export default function AuctionFlow({
   // it, so the deposit / lead / pay / missed screens can never render "$NaN"
   // or a sub-minimum bid no matter what was typed. Cents conversion happens
   // exactly once, here; every downstream computation works in cents.
-  const bidCents = parseBidCents(bidValue);
+  const bidCents = parseBidCents(bidValue, minBidCents);
   const depositCents = calculateDepositDisplay(bidCents);
   // Same bidCents/depositCents carried over from the bid screen — no re-parsing.
   const remainderCents = bidCents - depositCents;

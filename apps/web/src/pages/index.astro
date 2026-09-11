@@ -8,16 +8,57 @@ import type { Scene as SceneData, LeaderboardRow } from "../lib/types";
 
 const apiBaseUrl = import.meta.env.API_BASE_URL ?? "http://127.0.0.1:3001";
 
+// Strict mode for real deployments. This site's entire premise is "this is
+// who actually paid the most", so silently publishing the nine fabricated
+// mock people as the real champion and retinue — because the API container
+// happened to be mid-restart during a CI build — is a data-integrity failure,
+// not graceful degradation.
+//
+// Unset/falsy (the default) keeps the fallback: `astro dev` and a local
+// `astro build` must work with no Postgres and no API running, which is the
+// entire reason the mock fallback exists. A deployment pipeline sets
+// REQUIRE_LIVE_DATA=true and every fallback trigger below becomes a hard
+// build failure instead. See apps/web/.env.example.
+//
+// Stringified deliberately, and it matters. Astro's env plugin inlines a
+// private env var differently depending on where it came from: a shell/CI
+// variable whose value is exactly "true", "false", "0" or "1" is substituted
+// as the *literal* `true`/`false`/`0`/`1` (so this reads as a boolean), while
+// the same value coming from a .env file is substituted as the quoted string
+// "true". A bare `=== "true"` therefore silently fails to arm strict mode for
+// precisely the case that needs it most — `REQUIRE_LIVE_DATA=true astro build`
+// in a pipeline — and the build would publish mock data believing it was
+// protected. `String(...)` collapses both forms onto the same comparison.
+const requireLiveData = String(import.meta.env.REQUIRE_LIVE_DATA) === "true";
+
 interface LiveData {
   scene: SceneData;
   leaderboard: LeaderboardRow[];
   referenceNow: Date;
 }
 
-// Fetches and adapts the real scene/leaderboard, or returns null (logging
-// why) on any failure. Every failure mode below is a distinct, identifiable
-// log line — network error, bad HTTP status, and malformed/unparseable body
-// are different production problems and shouldn't share one vague message.
+// The single gate every fallback trigger goes through: under strict mode it
+// throws (failing the build, naming the condition that failed); otherwise it
+// warns and signals "use mock data" to the caller by returning null.
+//
+// `reason` is always a complete, self-identifying description of *which*
+// condition tripped — network error, bad HTTP status, malformed body and
+// no-champion-yet are different production problems and must never collapse
+// into one vague message, whether they end up in a warning or in a thrown
+// build error.
+function degradeToMock(reason: string): null {
+  if (requireLiveData) {
+    throw new Error(
+      `[build] REQUIRE_LIVE_DATA=true, so mock data may not be published: ${reason}`,
+    );
+  }
+  console.warn(`[build] ${reason} — falling back to mock data.`);
+  return null;
+}
+
+// Fetches and adapts the real scene/leaderboard, or returns null on any
+// failure (after routing that failure through `degradeToMock`, which either
+// logs it or turns it into a build error).
 async function fetchLiveData(): Promise<LiveData | null> {
   let sceneRes: Response;
   let leaderboardRes: Response;
@@ -27,18 +68,15 @@ async function fetchLiveData(): Promise<LiveData | null> {
       fetch(`${apiBaseUrl}/leaderboard`),
     ]);
   } catch (err) {
-    console.warn(
-      `[build] Could not reach the API at ${apiBaseUrl} (network error) — falling back to mock data:`,
-      err instanceof Error ? err.message : err,
+    return degradeToMock(
+      `could not reach the API at ${apiBaseUrl} (network error: ${err instanceof Error ? err.message : String(err)})`,
     );
-    return null;
   }
 
   if (!sceneRes.ok || !leaderboardRes.ok) {
-    console.warn(
-      `[build] API at ${apiBaseUrl} responded with a non-OK status (scene: ${sceneRes.status}, leaderboard: ${leaderboardRes.status}) — falling back to mock data.`,
+    return degradeToMock(
+      `the API at ${apiBaseUrl} responded with a non-OK status (scene: ${sceneRes.status}, leaderboard: ${leaderboardRes.status})`,
     );
-    return null;
   }
 
   let liveScene: SceneData | null;
@@ -49,16 +87,21 @@ async function fetchLiveData(): Promise<LiveData | null> {
     liveScene = adaptScene(sceneJson);
     liveLeaderboard = leaderboardJson.map(adaptLeaderboardRow);
   } catch (err) {
-    console.warn(
-      `[build] API at ${apiBaseUrl} returned a malformed response body — falling back to mock data:`,
-      err instanceof Error ? err.message : err,
+    // Reached both by unparseable JSON and by `adaptScene`/
+    // `adaptLeaderboardRow` rejecting a structurally wrong payload (an
+    // unparseable date, a non-array `retinue`). The adapters throw rather
+    // than coercing precisely so that a malformed body lands here, instead
+    // of producing an `Invalid Date` that crashes Scene.astro's formatters
+    // further downstream — past this catch and past the strict-mode gate.
+    return degradeToMock(
+      `the API at ${apiBaseUrl} returned a malformed response body (${err instanceof Error ? err.message : String(err)})`,
     );
-    return null;
   }
 
   if (!liveScene) {
-    console.warn("[build] /scene returned no champion yet (engine not bootstrapped) — using mock data.");
-    return null;
+    return degradeToMock(
+      `the API at ${apiBaseUrl} reports no champion yet on /scene (engine not bootstrapped)`,
+    );
   }
 
   // referenceNow is only meaningful alongside a real scene: it's the instant
@@ -81,5 +124,15 @@ const referenceNow: Date = live?.referenceNow ?? mockReferenceNow;
 ---
 <BaseLayout title="oneabobeall">
   <Scene scene={scene} referenceNow={referenceNow} />
-  <AuctionFlow client:idle leaderboard={leaderboard} />
+  <!--
+    `scene` is the single resolved source of truth by this point (real or
+    mock, never a mix), so the headline "current price of the seat" under the
+    Displace button is by construction the same figure the Scene tooltip
+    shows for the champion directly above it.
+  -->
+  <AuctionFlow
+    client:idle
+    leaderboard={leaderboard}
+    currentPriceCents={scene.champion.priceCents}
+  />
 </BaseLayout>

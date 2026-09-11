@@ -9,6 +9,23 @@ describe("AuctionFlow", () => {
     expect(screen.getByText("$4,210")).toBeInTheDocument();
   });
 
+  it("renders the champion price it is given, not the mock constant", () => {
+    // index.astro passes the resolved scene's champion price here, so the
+    // headline figure can't drift from the price the Scene tooltip shows for
+    // the champion rendered directly above it.
+    render(<AuctionFlow currentPriceCents={987_600} />);
+    expect(screen.getByText("$9,876")).toBeInTheDocument();
+    expect(screen.queryByText("$4,210")).not.toBeInTheDocument();
+
+    // ...and every figure derived from the price follows it: the minimum, the
+    // prefilled bid, and the deposit computed from that bid.
+    fireEvent.click(screen.getByText("Displace"));
+    fireEvent.click(screen.getByText("Continue with Google"));
+    expect(screen.getByText("$9,877")).toBeInTheDocument(); // "Minimum" box
+    expect(screen.getByLabelText(/your bid/i)).toHaveValue("9877");
+    expect(screen.getByText("$988")).toBeInTheDocument(); // 10% deposit, rounded
+  });
+
   it("renders a deterministic first countdown frame that ignores the wall clock", () => {
     // The island is server-rendered at build time (client:idle), so the first
     // render must not read Date.now() — otherwise the built HTML disagrees
