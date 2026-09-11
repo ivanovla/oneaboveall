@@ -1,0 +1,121 @@
+import { describe, it, expect } from "vitest";
+import { adaptScene, adaptLeaderboardRow, formatDurationLabel } from "../src/lib/sceneAdapter";
+import type { ApiSceneResponse, ApiLeaderboardRow } from "../src/lib/apiTypes";
+
+describe("formatDurationLabel", () => {
+  it("formats whole days, rounding down", () => {
+    expect(formatDurationLabel(950_400_000)).toBe("11d"); // 11 days exactly
+    expect(formatDurationLabel(100_800_000)).toBe("1d"); // 28h -> 1 full day
+  });
+
+  it("floors to 0d for anything under a day", () => {
+    expect(formatDurationLabel(3_600_000)).toBe("0d");
+  });
+});
+
+describe("adaptScene", () => {
+  it("maps a populated scene, using occupantId as the display name", () => {
+    const api: ApiSceneResponse = {
+      champion: { occupantId: "mark-vilensky", priceCents: 421_000, since: "2026-08-09T10:20:00.000Z" },
+      retinue: [
+        { occupantId: "daniel-crowe", priceCents: 398_000, startedAt: "2026-08-08T00:00:00.000Z", endedAt: "2026-08-09T00:00:00.000Z" },
+      ],
+    };
+
+    const scene = adaptScene(api);
+
+    expect(scene).not.toBeNull();
+    expect(scene!.champion.occupantId).toBe("mark-vilensky");
+    expect(scene!.champion.name).toBe("mark-vilensky");
+    expect(scene!.champion.priceCents).toBe(421_000);
+    expect(scene!.champion.since).toEqual(new Date("2026-08-09T10:20:00.000Z"));
+    // Deliberately empty, and load-bearing: the champion's reign is still
+    // running, so Scene.astro computes the held time live from `since` and
+    // ignores this field for them. A non-empty value here would mean a stale
+    // duration could be rendered instead.
+    expect(scene!.champion.heldLabel).toBe("");
+    expect(scene!.retinue).toHaveLength(1);
+    expect(scene!.retinue[0].heldLabel).toBe("1d");
+  });
+
+  it("returns null when there is no champion", () => {
+    expect(adaptScene({ champion: null, retinue: [] })).toBeNull();
+  });
+});
+
+describe("adaptScene — malformed payloads", () => {
+  // These all have to throw rather than return a partly-valid object. An
+  // `Invalid Date` passed through would only fail later, inside Scene.astro's
+  // Intl formatter, bypassing index.astro's malformed-body fallback (and its
+  // REQUIRE_LIVE_DATA gate) and crashing the build from a file that has no
+  // fallback of its own.
+  it("throws on an unparseable champion `since`", () => {
+    const api = {
+      champion: { occupantId: "mark-vilensky", priceCents: 421_000, since: "not a date" },
+      retinue: [],
+    } as ApiSceneResponse;
+
+    expect(() => adaptScene(api)).toThrow(/champion\.since is not a parseable date/);
+  });
+
+  it("throws on unparseable retinue timestamps, naming the offending index", () => {
+    const base = {
+      champion: { occupantId: "mark-vilensky", priceCents: 421_000, since: "2026-08-09T10:20:00.000Z" },
+    };
+
+    expect(() =>
+      adaptScene({
+        ...base,
+        retinue: [
+          { occupantId: "daniel-crowe", priceCents: 398_000, startedAt: "2026-08-08T00:00:00.000Z", endedAt: "2026-08-09T00:00:00.000Z" },
+          { occupantId: "osei-adjei", priceCents: 364_000, startedAt: "???", endedAt: "2026-08-08T00:00:00.000Z" },
+        ],
+      }),
+    ).toThrow(/retinue\[1\]\.startedAt is not a parseable date/);
+
+    expect(() =>
+      adaptScene({
+        ...base,
+        retinue: [
+          { occupantId: "daniel-crowe", priceCents: 398_000, startedAt: "2026-08-08T00:00:00.000Z", endedAt: "" },
+        ],
+      }),
+    ).toThrow(/retinue\[0\]\.endedAt is not a parseable date/);
+  });
+
+  it("throws when retinue is not an array", () => {
+    const api = {
+      champion: { occupantId: "mark-vilensky", priceCents: 421_000, since: "2026-08-09T10:20:00.000Z" },
+      retinue: null,
+    } as unknown as ApiSceneResponse;
+
+    expect(() => adaptScene(api)).toThrow(/retinue is not an array/);
+  });
+
+  // The absent-champion contract survives all of the above: nobody in the
+  // seat yet is a legitimate state, not a malformed body.
+  it("still returns null for an absent champion, without validating the rest", () => {
+    expect(adaptScene({ champion: null, retinue: null } as unknown as ApiSceneResponse)).toBeNull();
+  });
+});
+
+describe("adaptLeaderboardRow", () => {
+  it("maps an API row, formatting the duration and defaulting the name to occupantId", () => {
+    const api: ApiLeaderboardRow = { occupantId: "alice", rounds: 6, totalSpentCents: 1_840_000, totalDurationMs: 950_400_000 };
+    const row = adaptLeaderboardRow(api);
+
+    expect(row.occupantId).toBe("alice");
+    expect(row.name).toBe("alice");
+    expect(row.rounds).toBe(6);
+    expect(row.totalSpentCents).toBe(1_840_000);
+    expect(row.totalDurationLabel).toBe("11d");
+  });
+
+  it("throws on a non-numeric duration instead of rendering \"NaNd\"", () => {
+    const api = { occupantId: "alice", rounds: 6, totalSpentCents: 1_840_000, totalDurationMs: "a while" };
+
+    expect(() => adaptLeaderboardRow(api as unknown as ApiLeaderboardRow)).toThrow(
+      /totalDurationMs for "alice" is not a finite number/,
+    );
+  });
+});

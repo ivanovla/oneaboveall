@@ -2,6 +2,9 @@
   "name": "engine",
   "private": true,
   "type": "module",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",

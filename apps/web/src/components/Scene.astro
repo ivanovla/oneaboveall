@@ -16,40 +16,40 @@ interface Props {
 
 const { scene, referenceNow } = Astro.props;
 
-// Position (left%/top%) and rank badge for each of the 9 dots, transcribed
-// verbatim from the prototype's `PEOPLE` array
+// Position (left%/top%) and rank badge for each of the up-to-9 dots,
+// transcribed verbatim from the prototype's `PEOPLE` array
 // (design/prototype/one-above-all.dc.html lines 269-278). `Person` (Task 4)
 // only carries domain data — where a dot sits on the scene image and how
 // its tooltip is badged is presentation-only and has no home there, so it
-// lives here, keyed by the same `occupantId` strings `mockData.ts` uses.
-// Keyed (not positional) on purpose: nothing guarantees `scene.retinue`
-// stays in the prototype's left-to-right/top-to-bottom order forever, and a
-// positional pairing would silently show the wrong person's position/rank
-// the moment that order changed.
-const POSITIONS: Record<string, { left: number; top: number; rank: string }> = {
-  "mark-vilensky": { left: 50.4, top: 18.4, rank: "Champion" },
-  "daniel-crowe": { left: 17.5, top: 38.2, rank: "Retinue #1" },
-  "osei-adjei": { left: 28.5, top: 39.8, rank: "#2" },
-  "arthur-lemeshev": { left: 72.0, top: 40.0, rank: "#3" },
-  "ivan-dorn": { left: 82.7, top: 41.4, rank: "#4" },
-  "felix-lang": { left: 20.6, top: 57.6, rank: "#5" },
-  "y-kimura": { left: 35.7, top: 58.8, rank: "#6" },
-  "timur-aslanov": { left: 65.0, top: 60.0, rank: "#7" },
-  "paul-renier": { left: 79.0, top: 57.6, rank: "#8" },
-};
+// lives here.
+//
+// Indexed by *slot* (0 = champion, 1 = most-recently-displaced retinue
+// member, 2 = next, …), not by occupant identity. A dot's position is a
+// property of rank in the scene — the champion always sits at the top/center
+// slot regardless of who currently holds it — not a property of who
+// occupies that rank, so pairing `people[i]` with `POSITIONS[i]` by index is
+// pairing two views of the same underlying quantity (rank), not two
+// unrelated arrays that happen to coincide today. `scene.retinue` is already
+// guaranteed ordered most-recent-first by the engine's `getScene()`, so this
+// index alignment holds for real data, not just the mock set.
+const POSITIONS: Array<{ left: number; top: number; rank: string }> = [
+  { left: 50.4, top: 18.4, rank: "Champion" },
+  { left: 17.5, top: 38.2, rank: "Retinue #1" },
+  { left: 28.5, top: 39.8, rank: "#2" },
+  { left: 72.0, top: 40.0, rank: "#3" },
+  { left: 82.7, top: 41.4, rank: "#4" },
+  { left: 20.6, top: 57.6, rank: "#5" },
+  { left: 35.7, top: 58.8, rank: "#6" },
+  { left: 65.0, top: 60.0, rank: "#7" },
+  { left: 79.0, top: 57.6, rank: "#8" },
+];
 
-function positionFor(occupantId: string) {
-  const pos = POSITIONS[occupantId];
-  if (!pos) {
-    throw new Error(
-      `Scene.astro: no hotspot position/rank defined for occupantId "${occupantId}". ` +
-        `Add an entry to POSITIONS in apps/web/src/components/Scene.astro.`,
-    );
-  }
-  return pos;
-}
-
-const people = [scene.champion, ...scene.retinue];
+// A fresh deployment starts with just a champion and grows to up to 8
+// retinue over time, so `people` can legitimately be shorter than
+// `POSITIONS`; slicing to `POSITIONS.length` is a defensive cap for the
+// (engine-disallowed) case of more than 8 retinue rather than an expected
+// occurrence.
+const people = [scene.champion, ...scene.retinue].slice(0, POSITIONS.length);
 
 // The prototype's tooltip `period` copy is decorative demo text that isn't
 // self-consistent with its own "held" durations (see mockData.ts's comment
@@ -69,7 +69,7 @@ const periodDateFormatter = new Intl.DateTimeFormat("en-US", {
 });
 
 const hotspots = people.map((person, i) => {
-  const pos = positionFor(person.occupantId);
+  const pos = POSITIONS[i];
   const isChampion = i === 0;
   const period = isChampion
     ? `At the head of the table since ${periodDateTimeFormatter.format(person.since)}`
