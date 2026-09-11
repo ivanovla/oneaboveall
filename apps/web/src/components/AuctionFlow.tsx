@@ -7,6 +7,7 @@ import {
   mockReferenceNow,
   mockLeaderboard,
 } from "../lib/mockData";
+import type { LeaderboardRow } from "../lib/types";
 
 // A one-dollar step above the current price. Renders the "Minimum" figure on
 // the bid screen, seeds the input's prefilled value, and acts as the floor
@@ -265,7 +266,10 @@ function OverlayShell({
   );
 }
 
-export default function AuctionFlow({ initialScreen = "closed" }: { initialScreen?: Screen } = {}) {
+export default function AuctionFlow({
+  initialScreen = "closed",
+  leaderboard = mockLeaderboard,
+}: { initialScreen?: Screen; leaderboard?: LeaderboardRow[] } = {}) {
   const [screen, setScreen] = useState<Screen>(initialScreen);
   const [bidValue, setBidValue] = useState(INITIAL_BID_VALUE);
   const [paymentProvider, setPaymentProvider] = useState<PaymentProvider>("ru");
@@ -927,7 +931,7 @@ export default function AuctionFlow({ initialScreen = "closed" }: { initialScree
               </button>
             </div>
             <div style={{ marginTop: 38, borderTop: "1px solid var(--line)" }}>
-              {mockLeaderboard.map((row, i) => (
+              {leaderboard.map((row, i) => (
                 <div
                   key={row.occupantId}
                   style={{

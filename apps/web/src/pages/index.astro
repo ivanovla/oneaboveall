@@ -2,9 +2,45 @@
 import BaseLayout from "../layouts/BaseLayout.astro";
 import Scene from "../components/Scene.astro";
 import AuctionFlow from "../components/AuctionFlow";
-import { mockScene, mockReferenceNow } from "../lib/mockData";
+import { adaptScene, adaptLeaderboardRow } from "../lib/sceneAdapter";
+import { mockScene, mockLeaderboard, mockReferenceNow } from "../lib/mockData";
+import type { Scene as SceneData, LeaderboardRow } from "../lib/types";
+
+const apiBaseUrl = import.meta.env.API_BASE_URL ?? "http://127.0.0.1:3001";
+
+let scene: SceneData = mockScene;
+let leaderboard: LeaderboardRow[] = mockLeaderboard;
+// Scene.astro measures "time held" against this instant. The mock scene is a
+// frozen snapshot anchored to mockReferenceNow; real data is a live query, so
+// it gets measured against the actual build-time clock instead.
+let referenceNow: Date = mockReferenceNow;
+
+try {
+  const [sceneRes, leaderboardRes] = await Promise.all([
+    fetch(`${apiBaseUrl}/scene`),
+    fetch(`${apiBaseUrl}/leaderboard`),
+  ]);
+
+  if (!sceneRes.ok || !leaderboardRes.ok) {
+    throw new Error(`API responded with ${sceneRes.status}/${leaderboardRes.status}`);
+  }
+
+  const sceneJson = await sceneRes.json();
+  const leaderboardJson = await leaderboardRes.json();
+  const adaptedScene = adaptScene(sceneJson);
+
+  if (adaptedScene) {
+    scene = adaptedScene;
+    leaderboard = leaderboardJson.map(adaptLeaderboardRow);
+    referenceNow = new Date();
+  } else {
+    console.warn("[build] /scene returned no champion yet (engine not bootstrapped) — using mock data.");
+  }
+} catch (err) {
+  console.warn(`[build] Could not reach the API at ${apiBaseUrl}, falling back to mock data:`, err instanceof Error ? err.message : err);
+}
 ---
 <BaseLayout title="oneabobeall">
-  <Scene scene={mockScene} referenceNow={mockReferenceNow} />
-  <AuctionFlow client:idle />
+  <Scene scene={scene} referenceNow={referenceNow} />
+  <AuctionFlow client:idle leaderboard={leaderboard} />
 </BaseLayout>
