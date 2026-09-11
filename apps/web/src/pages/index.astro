@@ -8,37 +8,76 @@ import type { Scene as SceneData, LeaderboardRow } from "../lib/types";
 
 const apiBaseUrl = import.meta.env.API_BASE_URL ?? "http://127.0.0.1:3001";
 
-let scene: SceneData = mockScene;
-let leaderboard: LeaderboardRow[] = mockLeaderboard;
-// Scene.astro measures "time held" against this instant. The mock scene is a
-// frozen snapshot anchored to mockReferenceNow; real data is a live query, so
-// it gets measured against the actual build-time clock instead.
-let referenceNow: Date = mockReferenceNow;
+interface LiveData {
+  scene: SceneData;
+  leaderboard: LeaderboardRow[];
+  referenceNow: Date;
+}
 
-try {
-  const [sceneRes, leaderboardRes] = await Promise.all([
-    fetch(`${apiBaseUrl}/scene`),
-    fetch(`${apiBaseUrl}/leaderboard`),
-  ]);
+// Fetches and adapts the real scene/leaderboard, or returns null (logging
+// why) on any failure. Every failure mode below is a distinct, identifiable
+// log line — network error, bad HTTP status, and malformed/unparseable body
+// are different production problems and shouldn't share one vague message.
+async function fetchLiveData(): Promise<LiveData | null> {
+  let sceneRes: Response;
+  let leaderboardRes: Response;
+  try {
+    [sceneRes, leaderboardRes] = await Promise.all([
+      fetch(`${apiBaseUrl}/scene`),
+      fetch(`${apiBaseUrl}/leaderboard`),
+    ]);
+  } catch (err) {
+    console.warn(
+      `[build] Could not reach the API at ${apiBaseUrl} (network error) — falling back to mock data:`,
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
 
   if (!sceneRes.ok || !leaderboardRes.ok) {
-    throw new Error(`API responded with ${sceneRes.status}/${leaderboardRes.status}`);
+    console.warn(
+      `[build] API at ${apiBaseUrl} responded with a non-OK status (scene: ${sceneRes.status}, leaderboard: ${leaderboardRes.status}) — falling back to mock data.`,
+    );
+    return null;
   }
 
-  const sceneJson = await sceneRes.json();
-  const leaderboardJson = await leaderboardRes.json();
-  const adaptedScene = adaptScene(sceneJson);
+  let liveScene: SceneData | null;
+  let liveLeaderboard: LeaderboardRow[];
+  try {
+    const sceneJson = await sceneRes.json();
+    const leaderboardJson = await leaderboardRes.json();
+    liveScene = adaptScene(sceneJson);
+    liveLeaderboard = leaderboardJson.map(adaptLeaderboardRow);
+  } catch (err) {
+    console.warn(
+      `[build] API at ${apiBaseUrl} returned a malformed response body — falling back to mock data:`,
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
 
-  if (adaptedScene) {
-    scene = adaptedScene;
-    leaderboard = leaderboardJson.map(adaptLeaderboardRow);
-    referenceNow = new Date();
-  } else {
+  if (!liveScene) {
     console.warn("[build] /scene returned no champion yet (engine not bootstrapped) — using mock data.");
+    return null;
   }
-} catch (err) {
-  console.warn(`[build] Could not reach the API at ${apiBaseUrl}, falling back to mock data:`, err instanceof Error ? err.message : err);
+
+  // referenceNow is only meaningful alongside a real scene: it's the instant
+  // Scene.astro measures the champion's "time held" from, and pairing a real
+  // scene with the mock's frozen referenceNow (or vice versa) would fabricate
+  // a bogus duration. Bundled into the same object as scene/leaderboard so
+  // the caller can only ever apply all three together, never some subset.
+  return { scene: liveScene, leaderboard: liveLeaderboard, referenceNow: new Date() };
 }
+
+const live = await fetchLiveData();
+
+// Single all-or-nothing assignment: either every one of scene/leaderboard/
+// referenceNow comes from the live API, or all three stay on their mock
+// defaults. Never a real scene rendered against mockReferenceNow, or a real
+// scene paired with the mock leaderboard.
+const scene: SceneData = live?.scene ?? mockScene;
+const leaderboard: LeaderboardRow[] = live?.leaderboard ?? mockLeaderboard;
+const referenceNow: Date = live?.referenceNow ?? mockReferenceNow;
 ---
 <BaseLayout title="oneabobeall">
   <Scene scene={scene} referenceNow={referenceNow} />
