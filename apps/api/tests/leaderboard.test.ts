@@ -1,6 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
 import { buildServer } from "../src/server";
 
+vi.mock("../src/stripeClient", () => ({
+  stripe: {},
+  STRIPE_CURRENCY: "usd",
+  STRIPE_WEBHOOK_SECRET: "whsec_test",
+}));
+
 vi.mock("engine/queries/publicScene", () => ({
   getScene: vi.fn(async () => ({ champion: null, retinue: [] })),
   getLeaderboard: vi.fn(async () => [

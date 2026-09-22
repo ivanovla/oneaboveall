@@ -1,6 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
 import { buildServer } from "../src/server";
 
+vi.mock("../src/stripeClient", () => ({
+  stripe: {},
+  STRIPE_CURRENCY: "usd",
+  STRIPE_WEBHOOK_SECRET: "whsec_test",
+}));
+
 vi.mock("engine/queries/publicScene", () => ({
   getScene: vi.fn(async () => ({
     champion: { occupantId: "champ-1", priceCents: 421_000, since: new Date("2026-08-09T10:20:00.000Z") },
