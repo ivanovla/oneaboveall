@@ -42,6 +42,45 @@ describe("resolveBiddingPhaseSnapshot", () => {
     expect(round.phase).toBe("closed");
   });
 
+  it("refunds a participant who joined but never placed a bid before closing the empty round", async () => {
+    // Deposits live on roundParticipants now, decoupled from bidding: "no
+    // leader" no longer implies "no deposits to give back". A join with no
+    // bid (or whose every bid landed after snapshotAt and got filtered out)
+    // must still get its money back, or it is stuck at "held" forever —
+    // nothing else in the engine ever refunds it.
+    const startsAt = new Date(2026, 0, 1, 0, 0, 0);
+    const { roundId } = await seedRound(startsAt);
+    await join(roundId, "joined-never-bid", "pi_never_bid");
+    const snapshotAt = new Date(startsAt.getTime() + BIDDING_PHASE_MS);
+    const provider = new FakePaymentProvider();
+
+    const result = await resolveBiddingPhaseSnapshot(roundId, snapshotAt, provider);
+    expect(result.outcome).toBe("empty-closed");
+
+    const [round] = await db.select().from(rounds).where(eq(rounds.id, roundId));
+    expect(round.phase).toBe("closed");
+
+    const [participant] = await db.select().from(roundParticipants).where(eq(roundParticipants.roundId, roundId));
+    expect(participant.depositStatus).toBe("refunded");
+    expect(provider.refunds).toContain("pi_never_bid");
+  });
+
+  it("refunds a participant whose only bid landed after the bidding window closed", async () => {
+    const startsAt = new Date(2026, 0, 1, 0, 0, 0);
+    const { roundId } = await seedRound(startsAt);
+    const snapshotAt = new Date(startsAt.getTime() + BIDDING_PHASE_MS);
+    await join(roundId, "too-late", "pi_too_late");
+    await db.insert(bids).values({ roundId, bidderId: "too-late", amountCents: 11_000, placedAt: new Date(snapshotAt.getTime() + 1000) });
+    const provider = new FakePaymentProvider();
+
+    const result = await resolveBiddingPhaseSnapshot(roundId, snapshotAt, provider);
+    expect(result.outcome).toBe("empty-closed");
+
+    const [participant] = await db.select().from(roundParticipants).where(eq(roundParticipants.roundId, roundId));
+    expect(participant.depositStatus).toBe("refunded");
+    expect(provider.refunds).toContain("pi_too_late");
+  });
+
   it("creates a payment offer for the snapshot leader when the queue is non-empty", async () => {
     const startsAt = new Date(2026, 0, 1, 0, 0, 0);
     const { roundId } = await seedRound(startsAt);

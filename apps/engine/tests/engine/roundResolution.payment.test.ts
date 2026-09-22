@@ -118,6 +118,12 @@ describe("attemptOfferPayment — failure path (forfeit, ban, cascade)", () => {
 
     const [newOffer] = await db.select().from(paymentOffers).where(eq(paymentOffers.id, result.nextOfferId));
     expect(newOffer.bidId).not.toBe((await db.select().from(bids).where(eq(bids.bidderId, "a")))[0].id);
+
+    // The failed offer must reach a terminal status, not linger at
+    // "processing" — that is what lets a reaper tell an actually-declined
+    // charge apart from one still mid-flight.
+    const [failedOffer] = await db.select().from(paymentOffers).where(eq(paymentOffers.id, offerId));
+    expect(failedOffer.status).toBe("expired");
   });
 
   it("treats 'requires_action' identically to an outright decline — forfeit and ban, no special case", async () => {
@@ -146,6 +152,11 @@ describe("attemptOfferPayment — failure path (forfeit, ban, cascade)", () => {
 
     const [round] = await db.select().from(rounds).where(eq(rounds.id, roundId));
     expect(round.phase).toBe("closed");
+
+    // Terminal status on the round-closing failure branch too, not just the
+    // cascading one.
+    const [failedOffer] = await db.select().from(paymentOffers).where(eq(paymentOffers.id, offerId));
+    expect(failedOffer.status).toBe("expired");
   });
 
   it("closes the round instead of cascading once the round's own boundary has passed", async () => {

@@ -49,7 +49,13 @@ export async function resolveBiddingPhaseSnapshot(
   const leader = await getQueueLeader(roundId, snapshotAt);
 
   if (!leader) {
-    await db.update(rounds).set({ phase: "closed" }).where(eq(rounds.id, roundId));
+    // Refund, don't just close. Deposits live on roundParticipants now and are
+    // decoupled from bidding: an empty queue no longer implies there is no
+    // money to give back. Someone can join (and be charged) without ever
+    // placing a bid — or place every bid after snapshotAt, which getQueueLeader's
+    // asOf filters out — and closing the round bare would strand their deposit
+    // at "held" permanently, since no other path in the engine ever refunds it.
+    await closeRoundAndRefundHeld(roundId, provider);
     return { outcome: "empty-closed" };
   }
 
@@ -164,6 +170,15 @@ export async function attemptOfferPayment(
   // authentication is not special-cased into a grace period; it bans exactly
   // like an outright decline, since building a retry/notification path is
   // explicitly out of scope for this feature.
+  //
+  // Stamp the offer terminal first — "processing" means "a charge is in
+  // flight for this offer", and the charge is now definitively over. Leaving
+  // it there would make a declined offer indistinguishable from one whose
+  // worker died mid-attempt, which is exactly the distinction any
+  // crash-recovery reaper needs. Applies to both branches below (cascade and
+  // round-closed); "expired" is the same terminal status the pre-rework
+  // resolveExpiredOffer used for non-payment.
+  await db.update(paymentOffers).set({ status: "expired" }).where(eq(paymentOffers.id, offerId));
   await db.update(roundParticipants).set({ depositStatus: "forfeited" }).where(eq(roundParticipants.id, participant.id));
   await db.insert(bans).values({ bidderId: bid.bidderId, bannedUntil: new Date(now.getTime() + BAN_DURATION_MS) });
 
