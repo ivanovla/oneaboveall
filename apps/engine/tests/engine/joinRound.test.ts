@@ -1,5 +1,5 @@
-import { describe, it, expect, afterEach, afterAll } from "vitest";
-import { eq } from "drizzle-orm";
+import { describe, it, expect, afterEach, afterAll, vi } from "vitest";
+import { and, eq } from "drizzle-orm";
 import { db, pool } from "../../src/db/client";
 import { reigns, rounds, roundParticipants } from "../../src/db/schema";
 import { joinRound } from "../../src/engine/joinRound";
@@ -179,5 +179,54 @@ describe("joinRound", () => {
     expect(provider.refunds).toEqual(["pi_2"]);
     const [row] = await db.select().from(roundParticipants).where(eq(roundParticipants.roundId, roundId));
     expect(row.depositRef).toBe("pi_1");
+  });
+
+  it("skips the redundant refund when a concurrent close-time sweep already claimed the row", async () => {
+    // Task 7's review found a race between this function's refund-then-update
+    // path and closeRoundAndRefundHeld (roundResolution.ts): both can
+    // independently decide to refund the exact same newly-inserted "held"
+    // row if the round transitions out of "bidding" at the same moment a
+    // late-arriving webhook is being processed here. Genuine timing
+    // nondeterminism isn't reliably reproducible in a unit test, so this
+    // deterministically injects the sweep's UPDATE at the precise point a
+    // real race would land it: immediately before joinRound's own "is this
+    // row still held" read, by intercepting the one SELECT this function
+    // issues against round_participants in the refund path.
+    const roundId = await seedRound("resolving"); // already past "bidding" so joinRound takes the refund-path branch
+    const provider = new FakePaymentProvider();
+
+    const originalQuery = pool.query.bind(pool);
+    let sweepInjected = false;
+    const querySpy = vi.spyOn(pool, "query").mockImplementation(((...args: unknown[]) => {
+      const first = args[0] as unknown;
+      const text = typeof first === "string" ? first : ((first as { text?: string })?.text ?? "");
+      if (!sweepInjected && /^\s*select/i.test(text) && text.includes("round_participants")) {
+        sweepInjected = true;
+        return db
+          .update(roundParticipants)
+          .set({ depositStatus: "refunded" })
+          .where(and(eq(roundParticipants.roundId, roundId), eq(roundParticipants.bidderId, "a")))
+          .then(() => (originalQuery as (...a: unknown[]) => unknown)(...args));
+      }
+      return (originalQuery as (...a: unknown[]) => unknown)(...args);
+    }) as typeof pool.query);
+
+    try {
+      const result = await joinRound(
+        { roundId, bidderId: "a", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1", now: new Date() },
+        provider,
+      );
+
+      expect(result.outcome).toBe("refunded-round-closed");
+      expect(sweepInjected).toBe(true);
+      // The concurrent sweep already refunded this row — joinRound must see
+      // that on its own re-read and skip calling provider.refund a second
+      // time for the same deposit.
+      expect(provider.refunds).toHaveLength(0);
+      const [row] = await db.select().from(roundParticipants).where(eq(roundParticipants.roundId, roundId));
+      expect(row.depositStatus).toBe("refunded");
+    } finally {
+      querySpy.mockRestore();
+    }
   });
 });

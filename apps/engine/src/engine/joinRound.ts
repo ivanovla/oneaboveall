@@ -91,8 +91,27 @@ export async function joinRound(
   const stillOpen = !!currentRound && isBiddingOpen(currentRound, params.now);
 
   if (!stillOpen) {
-    await provider.refund(params.depositRef);
-    await db.update(roundParticipants).set({ depositStatus: "refunded" }).where(eq(roundParticipants.id, inserted.id));
+    // Re-read the row's current status immediately before refunding — a
+    // concurrent close-time sweep (closeRoundAndRefundHeld, in
+    // roundResolution.ts) could have already claimed and refunded this
+    // exact row between our insert above and here. Skipping the refund
+    // when we see it's no longer "held" narrows (does not fully
+    // eliminate — a genuinely simultaneous claim from both sides is still
+    // possible without a dedicated in-flight status) that race, while still
+    // refunding-before-marking so a crash here never falsely claims money
+    // was returned that wasn't.
+    const [current] = await db
+      .select()
+      .from(roundParticipants)
+      .where(eq(roundParticipants.id, inserted.id))
+      .limit(1);
+    if (current?.depositStatus === "held") {
+      await provider.refund(params.depositRef);
+      await db
+        .update(roundParticipants)
+        .set({ depositStatus: "refunded" })
+        .where(and(eq(roundParticipants.id, inserted.id), eq(roundParticipants.depositStatus, "held")));
+    }
     return { outcome: "refunded-round-closed" };
   }
 
