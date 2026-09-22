@@ -210,3 +210,61 @@ describe("POST /webhooks/stripe", () => {
     expect(response.statusCode).toBeGreaterThanOrEqual(500);
   });
 });
+
+// The raw-body capture above replaces Fastify's built-in application/json
+// parser globally, so it has to preserve that parser's two guarantees for
+// every POST route on this service — not just the webhook.
+describe("application/json content-type parser", () => {
+  // Every route below is reached before its handler runs: the parser rejects
+  // these bodies, so the assertions hold regardless of route-level logic.
+  const routes = ["/bids", "/rounds/round-1/join", "/webhooks/stripe"];
+
+  it.each(routes)("rejects malformed JSON on %s with 400, not 500", async (url) => {
+    const app = buildServer();
+    const response = await app.inject({
+      method: "POST",
+      url,
+      headers: { "content-type": "application/json" },
+      payload: "{not json",
+    });
+
+    // A bare SyntaxError with no statusCode falls through to Fastify's
+    // generic 500 handler, turning a client error into a false server-error
+    // alert in production.
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toBe("Bad Request");
+  });
+
+  it.each(routes)("rejects a prototype-poisoning payload on %s with 400", async (url) => {
+    const app = buildServer();
+    const response = await app.inject({
+      method: "POST",
+      url,
+      headers: { "content-type": "application/json" },
+      payload: '{"bidderId":"a","amountCents":1,"__proto__":{"polluted":"yes"}}',
+    });
+
+    expect(response.statusCode).toBe(400);
+    // Assert the *parser* rejected this, not the route's own field
+    // validation — several of these routes answer 400 for their own reasons,
+    // which would make this test pass against a parser with no protection at
+    // all. "Bad Request" is the Fastify error-handler shape for a thrown
+    // parser SyntaxError; route-level 400s return their own `error` strings.
+    expect(response.json().error).toBe("Bad Request");
+    // Nothing may be polluted even in the rejected case.
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
+  it.each(routes)("rejects a constructor-poisoning payload on %s with 400", async (url) => {
+    const app = buildServer();
+    const response = await app.inject({
+      method: "POST",
+      url,
+      headers: { "content-type": "application/json" },
+      payload: '{"bidderId":"a","constructor":{"prototype":{"polluted":"yes"}}}',
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toBe("Bad Request");
+  });
+});
