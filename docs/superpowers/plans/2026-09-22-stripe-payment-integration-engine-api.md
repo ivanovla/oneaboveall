@@ -1312,7 +1312,7 @@ git commit -m "feat(engine): placeBid no longer charges anything — gated on Ro
 - Consumes: `roundParticipants` (Task 1), shrunk `PaymentProvider` (Task 3), `installChampion`
   (unchanged, `apps/engine/src/engine/installChampion.ts`).
 - Produces:
-  - `resolveBiddingPhaseSnapshot(roundId, snapshotAt, provider, executedAt?): Promise<{ outcome: "empty-closed" } | { outcome: "offer-created"; offerId: string }>`
+  - `resolveBiddingPhaseSnapshot(roundId, snapshotAt, provider, executedAt?): Promise<{ outcome: "empty-closed" } | { outcome: "already-resolving" } | { outcome: "offer-created"; offerId: string }>`
     — same behavior as before, except the "offer-created" outcome now also returns the new
     offer's id (Task 8's scheduler needs it to attempt payment immediately), and the "born
     already expired" refund path now refunds `roundParticipants` instead of `bids`.
@@ -1794,7 +1794,7 @@ export async function resolveBiddingPhaseSnapshot(
   snapshotAt: Date,
   provider: PaymentProvider,
   executedAt: Date = snapshotAt,
-): Promise<{ outcome: "empty-closed" } | { outcome: "offer-created"; offerId: string }> {
+): Promise<{ outcome: "empty-closed" } | { outcome: "already-resolving" } | { outcome: "offer-created"; offerId: string }> {
   // Claim-before-snapshot: symmetric to attemptOfferPayment's claim-before-charge
   // guard below. Without this, two overlapping scheduler ticks (or two worker
   // instances) both seeing phase = "bidding" would both proceed, each creating
@@ -1806,14 +1806,28 @@ export async function resolveBiddingPhaseSnapshot(
     .returning();
 
   if (claimed.length === 0) {
-    return { outcome: "empty-closed" };
+    // A concurrent caller already claimed this round (its own UPDATE moved
+    // the phase off "bidding" first) — distinct from "empty-closed" (this
+    // caller genuinely closed an empty round itself). Collapsing this into
+    // "empty-closed" would make the losing side of the race tell the
+    // scheduler to start the next round while the winning side is still
+    // resolving this one — a real duplicate-round hazard, not just an
+    // inaccurate return value.
+    return { outcome: "already-resolving" };
   }
   const round = claimed[0];
 
   const leader = await getQueueLeader(roundId, snapshotAt);
 
   if (!leader) {
-    await db.update(rounds).set({ phase: "closed" }).where(eq(rounds.id, roundId));
+    // A participant can join (pay the deposit) and never place a bid, or
+    // every bid placed can land after snapshotAt and be filtered out by
+    // getQueueLeader's asOf — either way, an empty queue does not mean no
+    // deposits are held. Unlike before this plan's rework (when deposits
+    // lived on bids and "no leader" really did mean "nothing to refund"),
+    // deposits now live on roundParticipants independently of bidding, so
+    // this path must sweep them too.
+    await closeRoundAndRefundHeld(roundId, provider);
     return { outcome: "empty-closed" };
   }
 
@@ -1928,6 +1942,12 @@ export async function attemptOfferPayment(
   // authentication is not special-cased into a grace period; it bans exactly
   // like an outright decline, since building a retry/notification path is
   // explicitly out of scope for this feature.
+  //
+  // The offer itself is stamped "expired" (not left "processing") so it's
+  // distinguishable later from an offer that's still genuinely mid-flight —
+  // "processing" means "an attempt is in progress right now", not "an
+  // attempt was made and declined".
+  await db.update(paymentOffers).set({ status: "expired" }).where(eq(paymentOffers.id, offerId));
   await db.update(roundParticipants).set({ depositStatus: "forfeited" }).where(eq(roundParticipants.id, participant.id));
   await db.insert(bans).values({ bidderId: bid.bidderId, bannedUntil: new Date(now.getTime() + BAN_DURATION_MS) });
 
@@ -2234,7 +2254,7 @@ export async function tick(now: Date, provider: PaymentProvider): Promise<void> 
       const result = await resolveBiddingPhaseSnapshot(round.id, snapshotAt, provider, now);
       if (result.outcome === "empty-closed") {
         await startNextRound(round.reignId, round.startsAt);
-      } else {
+      } else if (result.outcome === "offer-created") {
         // The remainder charge is off-session and automatic — attempt it
         // (and follow any cascade) immediately, in this same tick, rather
         // than waiting for a bidder who was never going to be interactively
@@ -2244,6 +2264,10 @@ export async function tick(now: Date, provider: PaymentProvider): Promise<void> 
           await startNextRound(round.reignId, round.startsAt);
         }
       }
+      // result.outcome === "already-resolving": a concurrent caller (another
+      // tick, or another worker instance) already claimed this round in the
+      // same instant — that caller is responsible for driving it to
+      // settlement, this one does nothing further.
     } catch (err) {
       // One round's failure (a transient DB error, a provider hiccup further
       // down the chain) must not abort the whole tick — the failing row gets
@@ -2258,7 +2282,20 @@ export async function tick(now: Date, provider: PaymentProvider): Promise<void> 
   // every offer the instant it's created, so nothing should still be "pending"
   // once its expiresAt has passed. This catches the rare case where a prior
   // process died between resolveBiddingPhaseSnapshot creating an offer and
-  // settleRound finishing it.
+  // settleRound ever being called on it (settleRound's own claim-before-charge
+  // guard is what makes retrying it here safe).
+  //
+  // Known residual gap (not solved by this poll, and out of scope for this
+  // plan — matches other narrow crash-window gaps already accepted elsewhere
+  // in this codebase): if the process instead dies AFTER attemptOfferPayment
+  // claims an offer to "processing" but BEFORE it finishes, the offer is
+  // invisible to this poll (it only selects `status = "pending"`) and the
+  // round is stuck in phase "payment" indefinitely — nothing currently
+  // reclaims a stale "processing" offer, because doing so safely requires
+  // reconciling against Stripe's own record of whether the charge actually
+  // went through before retrying it (retrying blind risks a double charge).
+  // A future hardening pass should add that reconciliation; this plan does
+  // not attempt it.
   const duePendingOffers = await db
     .select()
     .from(paymentOffers)
