@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { buildServer } from "../src/server";
 
 // vi.mock factories are hoisted above regular top-level code (including
@@ -14,6 +14,11 @@ const { createPaymentIntent } = vi.hoisted(() => ({
 vi.mock("engine/db/repository", () => ({
   getRoundParticipant: vi.fn(async () => null),
   getCurrentReign: vi.fn(async () => ({ id: "reign-1", occupantId: "champ", priceCents: 10_000, startedAt: new Date(), endedAt: null })),
+  // By default, the current round is "round-1" — matching the `:id` the
+  // happy-path/400/404(no reign)/409 tests below post to, so those tests
+  // still reach the code paths they're testing now that the route verifies
+  // `:id` against the actual current round.
+  getLatestRound: vi.fn(async () => ({ id: "round-1", reignId: "reign-1", startsAt: new Date(), phase: "bidding" })),
 }));
 
 vi.mock("../src/stripeClient", () => ({
@@ -23,6 +28,14 @@ vi.mock("../src/stripeClient", () => ({
 }));
 
 describe("POST /rounds/:id/join", () => {
+  // createPaymentIntent is a module-level vi.fn() shared across every test in
+  // this file (via vi.mock's hoisted factory), so its call history must be
+  // cleared between tests — otherwise a later test's `.not.toHaveBeenCalled()`
+  // would see calls left over from an earlier test.
+  beforeEach(() => {
+    createPaymentIntent.mockClear();
+  });
+
   it("creates a deposit PaymentIntent and returns its client secret", async () => {
     const app = buildServer();
     const response = await app.inject({
@@ -64,5 +77,41 @@ describe("POST /rounds/:id/join", () => {
     const app = buildServer();
     const response = await app.inject({ method: "POST", url: "/rounds/round-1/join", payload: { bidderId: "challenger" } });
     expect(response.statusCode).toBe(409);
+  });
+
+  it("rejects with 404 when the :id in the URL doesn't match any round", async () => {
+    const { getLatestRound } = await import("engine/db/repository");
+    vi.mocked(getLatestRound).mockResolvedValueOnce(null);
+
+    const app = buildServer();
+    const response = await app.inject({ method: "POST", url: "/rounds/nonexistent-round/join", payload: { bidderId: "challenger" } });
+    expect(response.statusCode).toBe(404);
+    expect(createPaymentIntent).not.toHaveBeenCalled();
+  });
+
+  it("rejects with 404 when the :id in the URL is a real round but not the current one", async () => {
+    const { getLatestRound } = await import("engine/db/repository");
+    // The current round (derived server-side from the current reign) is
+    // "round-2" — a caller posting to the stale/other "round-1" must not be
+    // able to join, and must not trigger a PaymentIntent.
+    vi.mocked(getLatestRound).mockResolvedValueOnce({ id: "round-2", reignId: "reign-1", startsAt: new Date(), phase: "bidding" } as any);
+
+    const app = buildServer();
+    const response = await app.inject({ method: "POST", url: "/rounds/round-1/join", payload: { bidderId: "challenger" } });
+    expect(response.statusCode).toBe(404);
+    expect(createPaymentIntent).not.toHaveBeenCalled();
+  });
+
+  it("defeats the duplicate-join bypass: varying :id between calls for the same bidder still gets a 404, not a second PaymentIntent", async () => {
+    const { getLatestRound } = await import("engine/db/repository");
+    // Current round is "round-1"; a second call to a different, made-up :id
+    // for the same bidder must not sail past the duplicate-join guard by
+    // simply finding no participant row under that other key.
+    vi.mocked(getLatestRound).mockResolvedValueOnce({ id: "round-1", reignId: "reign-1", startsAt: new Date(), phase: "bidding" } as any);
+
+    const app = buildServer();
+    const response = await app.inject({ method: "POST", url: "/rounds/some-other-id/join", payload: { bidderId: "challenger" } });
+    expect(response.statusCode).toBe(404);
+    expect(createPaymentIntent).not.toHaveBeenCalled();
   });
 });
