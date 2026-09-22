@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, afterAll } from "vitest";
-import { sql } from "drizzle-orm";
+import { sql, and, eq } from "drizzle-orm";
 import { db, pool } from "../../src/db/client";
 import { reigns, rounds, bids, roundParticipants } from "../../src/db/schema";
 import { placeBidAtomic } from "../../src/db/repository";
@@ -39,6 +39,17 @@ describe("placeBidAtomic", () => {
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("expected rejection");
     expect(result.reason).toContain("Join this round");
+  });
+
+  it("rejects a bid from a participant whose deposit is no longer held", async () => {
+    const roundId = await seedRound(10_000);
+    await join(roundId, "a");
+    await db
+      .update(roundParticipants)
+      .set({ depositStatus: "refunded" })
+      .where(and(eq(roundParticipants.roundId, roundId), eq(roundParticipants.bidderId, "a")));
+    const result = await placeBidAtomic({ roundId, bidderId: "a", amountCents: 10_100 });
+    expect(result.ok).toBe(false);
   });
 
   it("rejects a bid that doesn't beat the champion by the minimum increment", async () => {
