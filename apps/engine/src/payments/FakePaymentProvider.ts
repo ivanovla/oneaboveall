@@ -1,31 +1,22 @@
 import type { PaymentProvider } from "./PaymentProvider";
 
 export class FakePaymentProvider implements PaymentProvider {
-  charges: { bidderId: string; amountCents: number; ref: string }[] = [];
-  remainderCharges: { bidderId: string; amountCents: number; depositRef: string }[] = [];
+  remainderCharges: { paymentMethodRef: string; amountCents: number }[] = [];
   refunds: string[] = [];
-  private failNextRemainder = false;
+  private nextRemainderResult: "succeeded" | "requires_action" | "failed" = "succeeded";
 
-  async chargeDeposit(bidderId: string, amountCents: number): Promise<string> {
-    const ref = `dep_${this.charges.length + 1}`;
-    this.charges.push({ bidderId, amountCents, ref });
-    return ref;
-  }
-
-  async chargeRemainder(bidderId: string, amountCents: number, depositRef: string): Promise<boolean> {
-    this.remainderCharges.push({ bidderId, amountCents, depositRef });
-    if (this.failNextRemainder) {
-      this.failNextRemainder = false;
-      return false;
-    }
-    return true;
+  async chargeRemainderOffSession(paymentMethodRef: string, amountCents: number): Promise<"succeeded" | "requires_action" | "failed"> {
+    this.remainderCharges.push({ paymentMethodRef, amountCents });
+    const result = this.nextRemainderResult;
+    this.nextRemainderResult = "succeeded";
+    return result;
   }
 
   async refund(depositRef: string): Promise<void> {
     this.refunds.push(depositRef);
   }
 
-  failNextRemainderCharge(): void {
-    this.failNextRemainder = true;
+  failNextRemainderCharge(result: "requires_action" | "failed" = "failed"): void {
+    this.nextRemainderResult = result;
   }
 }
