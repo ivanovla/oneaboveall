@@ -1,12 +1,16 @@
 import type { PaymentProvider } from "./PaymentProvider";
 
 export class FakePaymentProvider implements PaymentProvider {
-  remainderCharges: { paymentMethodRef: string; amountCents: number }[] = [];
+  remainderCharges: { customerRef: string; paymentMethodRef: string; amountCents: number }[] = [];
   refunds: string[] = [];
   private nextRemainderResult: "succeeded" | "requires_action" | "failed" = "succeeded";
 
-  async chargeRemainderOffSession(paymentMethodRef: string, amountCents: number): Promise<"succeeded" | "requires_action" | "failed"> {
-    this.remainderCharges.push({ paymentMethodRef, amountCents });
+  async chargeRemainderOffSession(
+    customerRef: string,
+    paymentMethodRef: string,
+    amountCents: number,
+  ): Promise<"succeeded" | "requires_action" | "failed"> {
+    this.remainderCharges.push({ customerRef, paymentMethodRef, amountCents });
     const result = this.nextRemainderResult;
     this.nextRemainderResult = "succeeded";
     return result;

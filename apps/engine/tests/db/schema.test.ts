@@ -27,12 +27,15 @@ describe("schema", () => {
 
     const [inserted] = await db
       .insert(roundParticipants)
-      .values({ roundId: round.id, bidderId: "bidder-1", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1" })
+      .values({ roundId: round.id, bidderId: "bidder-1", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1", customerRef: "cus_1" })
       .returning();
     expect(inserted.depositStatus).toBe("held");
+    // The Stripe Customer the saved PaymentMethod is attached to — without it
+    // the off-session remainder charge cannot reuse that method at all.
+    expect(inserted.customerRef).toBe("cus_1");
 
     await expect(
-      db.insert(roundParticipants).values({ roundId: round.id, bidderId: "bidder-1", depositCents: 1_000, depositRef: "pi_2", paymentMethodRef: "pm_2" }),
+      db.insert(roundParticipants).values({ roundId: round.id, bidderId: "bidder-1", depositCents: 1_000, depositRef: "pi_2", paymentMethodRef: "pm_2", customerRef: "cus_2" }),
     ).rejects.toThrow();
 
     await db.delete(roundParticipants).where(eq(roundParticipants.id, inserted.id));

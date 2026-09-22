@@ -48,27 +48,36 @@ export function registerStripeWebhookRoute(
       // setting can never silently turn a collected deposit into a no-op.
       const paymentMethodRef =
         typeof intent.payment_method === "string" ? intent.payment_method : (intent.payment_method?.id ?? null);
+      // Same tolerance for the Customer: a webhook delivers a bare id string,
+      // but an expansion setting could turn it into an object.
+      const customerRef = typeof intent.customer === "string" ? intent.customer : (intent.customer?.id ?? null);
 
-      if (!roundId || !bidderId) {
+      if (intent.metadata?.kind !== "deposit" || !roundId || !bidderId) {
         // Not a deposit PaymentIntent. The remainder off-session charge
         // (StripePaymentProvider.chargeRemainderOffSession) also emits
-        // payment_intent.succeeded and deliberately carries no round
-        // metadata — treating it as a deposit would pass joinRound a foreign
+        // payment_intent.succeeded and deliberately carries no deposit
+        // marker — treating it as a deposit would pass joinRound a foreign
         // depositRef, and its duplicate-join branch would refund the
         // remainder we just collected. Ignoring it is the correct outcome.
+        // The `kind` marker is what makes this positive identification
+        // rather than an inference from which metadata keys happen to exist.
         request.log.info(
           { paymentIntentId: intent.id },
-          "stripe webhook: payment_intent.succeeded without round metadata; not a deposit, ignoring",
+          "stripe webhook: payment_intent.succeeded is not a deposit (no kind=deposit marker / round metadata), ignoring",
         );
-      } else if (!paymentMethodRef) {
-        // A deposit was genuinely collected but we can't save the payment
-        // method needed to charge the remainder later. Retrying won't fix a
-        // payload that simply lacks it, so this returns 200 (no redelivery
-        // storm) and is escalated to the log instead.
+      } else if (!paymentMethodRef || !customerRef) {
+        // A deposit was genuinely collected but we can't save the refs needed
+        // to charge the remainder later, so this bidder cannot be joined.
+        // Retrying won't fix a payload that simply lacks them — give the money
+        // straight back instead of logging and walking away, which would leave
+        // the charge with no participant row and therefore nothing to ever
+        // refund it. A throw from refund() is deliberately NOT swallowed: the
+        // resulting 500 is what makes Stripe redeliver and try again.
         request.log.error(
-          { paymentIntentId: intent.id, roundId, bidderId },
-          "stripe webhook: deposit succeeded but PaymentIntent has no payment_method; bidder was charged and not joined",
+          { paymentIntentId: intent.id, roundId, bidderId, hasPaymentMethod: !!paymentMethodRef, hasCustomer: !!customerRef },
+          "stripe webhook: deposit succeeded but PaymentIntent lacks payment_method/customer; refunding, bidder not joined",
         );
+        await provider.refund(intent.id);
       } else {
         // joinRound is idempotent on (roundId, bidderId) via a DB unique
         // constraint, so a Stripe redelivery of this same event is a safe
@@ -82,6 +91,7 @@ export function registerStripeWebhookRoute(
             depositCents: intent.amount,
             depositRef: intent.id,
             paymentMethodRef,
+            customerRef,
             now: new Date(),
           },
           provider,

@@ -101,7 +101,7 @@ describe("getRoundParticipant", () => {
   it("returns the participant row once joined", async () => {
     const [reign] = await db.insert(reigns).values({ occupantId: "u1", priceCents: 10_000, startedAt: new Date() }).returning();
     const [round] = await db.insert(rounds).values({ reignId: reign.id, startsAt: new Date() }).returning();
-    await db.insert(roundParticipants).values({ roundId: round.id, bidderId: "a", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1" });
+    await db.insert(roundParticipants).values({ roundId: round.id, bidderId: "a", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1", customerRef: "cus_1" });
 
     const participant = await getRoundParticipant(round.id, "a");
     expect(participant?.depositStatus).toBe("held");

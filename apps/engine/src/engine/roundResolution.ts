@@ -142,7 +142,11 @@ export async function attemptOfferPayment(
   if (!participant) throw new Error("Round participant not found for offer's bidder.");
 
   const remainderCents = bid.amountCents - participant.depositCents;
-  const chargeResult = await provider.chargeRemainderOffSession(participant.paymentMethodRef, remainderCents);
+  const chargeResult = await provider.chargeRemainderOffSession(
+    participant.customerRef,
+    participant.paymentMethodRef,
+    remainderCents,
+  );
 
   if (chargeResult === "succeeded") {
     await db.update(paymentOffers).set({ status: "paid" }).where(eq(paymentOffers.id, offerId));
@@ -232,12 +236,17 @@ export async function attemptOfferPayment(
 // Attempts offerId and, on a cascade, immediately attempts the next offer too
 // — repeating until the round is settled. This is what a caller should use
 // in practice; attemptOfferPayment on its own only performs a single step.
+//
+// "already-processed" is a third, non-terminal outcome: a concurrent caller
+// owns this offer and will drive the round to settlement itself. Callers that
+// act on the round reaching a terminal state (the scheduler starting the next
+// round) must match "round-closed" only, never treat the two alike.
 export async function settleRound(
   offerId: string,
   now: Date,
   provider: PaymentProvider,
   onInstalled?: (occupantId: string) => void,
-): Promise<{ outcome: "paid" } | { outcome: "round-closed" }> {
+): Promise<{ outcome: "paid" } | { outcome: "round-closed" } | { outcome: "already-processed" }> {
   let currentOfferId = offerId;
   for (;;) {
     const result = await attemptOfferPayment(currentOfferId, now, provider, onInstalled);
@@ -247,7 +256,11 @@ export async function settleRound(
     if (result.outcome === "already-processed") {
       // A concurrent settleRound (or the scheduler's crash-recovery poll)
       // already claimed this offer — nothing more for this call to do.
-      return { outcome: "round-closed" };
+      // Deliberately NOT "round-closed": that outcome tells the scheduler the
+      // round reached a terminal state and the next round should be started,
+      // and the winner of the claim race is going to do exactly that itself.
+      // Reporting it here too would start a duplicate next round.
+      return { outcome: "already-processed" };
     }
     currentOfferId = result.nextOfferId;
   }

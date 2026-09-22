@@ -22,7 +22,7 @@ async function seedRound(priceCents: number, phase: "bidding" | "payment" | "clo
 }
 
 async function join(roundId: string, bidderId: string) {
-  await db.insert(roundParticipants).values({ roundId, bidderId, depositCents: 1_000, depositRef: `pi_${bidderId}`, paymentMethodRef: `pm_${bidderId}` });
+  await db.insert(roundParticipants).values({ roundId, bidderId, depositCents: 1_000, depositRef: `pi_${bidderId}`, paymentMethodRef: `pm_${bidderId}`, customerRef: `cus_${bidderId}` });
 }
 
 describe("placeBidAtomic", () => {

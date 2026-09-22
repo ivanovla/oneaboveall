@@ -1,6 +1,6 @@
 import { and, eq, lte, isNull } from "drizzle-orm";
 import { db } from "../db/client";
-import { reigns, rounds, paymentOffers } from "../db/schema";
+import { reigns, rounds, paymentOffers, roundParticipants } from "../db/schema";
 import { resolveBiddingPhaseSnapshot, settleRound } from "./roundResolution";
 import { ROUND_MS, BIDDING_PHASE_MS } from "../domain/config";
 import type { PaymentProvider } from "../payments/PaymentProvider";
@@ -69,12 +69,66 @@ export async function tick(now: Date, provider: PaymentProvider): Promise<void> 
   for (const offer of duePendingOffers) {
     try {
       const [round] = await db.select().from(rounds).where(eq(rounds.id, offer.roundId)).limit(1);
+      if (!round) {
+        // A foreign-key constraint makes this impossible in practice; without
+        // the guard, the destructure below would throw a bare TypeError that
+        // the catch reports as a confusing "failed to settle".
+        console.error(`tick: payment offer ${offer.id} references missing round ${offer.roundId}; skipping`);
+        continue;
+      }
       const result = await settleRound(offer.id, now, provider);
       if (result.outcome === "round-closed") {
         await startNextRound(round.reignId, round.startsAt);
       }
     } catch (err) {
       console.error(`tick: failed to settle overdue payment offer ${offer.id}`, err);
+    }
+  }
+
+  // Reconciliation sweep: a deposit still "held" on a round that has already
+  // closed is money we owe back and nothing else will ever return. It can be
+  // left behind by any of several partial failures — closeRoundAndRefundHeld
+  // throwing part-way through its loop, joinRound's own race-refund call
+  // failing after the row was inserted, or a process dying between the two.
+  // Each of those paths is individually narrow; together they are the only
+  // ways money gets stranded, and this one sweep retires all of them.
+  const strandedDeposits = await db
+    .select({ id: roundParticipants.id, depositRef: roundParticipants.depositRef })
+    .from(roundParticipants)
+    .innerJoin(rounds, eq(roundParticipants.roundId, rounds.id))
+    .where(and(eq(roundParticipants.depositStatus, "held"), eq(rounds.phase, "closed")));
+
+  for (const row of strandedDeposits) {
+    try {
+      // Refund first, mark second — the same ordering joinRound and
+      // closeRoundAndRefundHeld use, and for the same reason: a crash between
+      // the two must never leave the database claiming money was returned
+      // when it wasn't, because nothing would ever revisit such a row. The
+      // row staying "held" is the recoverable direction; this sweep simply
+      // retries it on the next tick.
+      //
+      // The re-read immediately below, plus the conditional UPDATE after,
+      // narrow (do not fully eliminate) a concurrent claim by
+      // closeRoundAndRefundHeld — same narrowing joinRound documents. A
+      // genuinely simultaneous claim costs at most one rejected duplicate
+      // refund: Stripe refuses a second full refund on an already-refunded
+      // PaymentIntent rather than paying it twice.
+      const [current] = await db
+        .select()
+        .from(roundParticipants)
+        .where(eq(roundParticipants.id, row.id))
+        .limit(1);
+      if (current?.depositStatus !== "held") continue; // another path got there first
+
+      await provider.refund(row.depositRef);
+      await db
+        .update(roundParticipants)
+        .set({ depositStatus: "refunded" })
+        .where(and(eq(roundParticipants.id, row.id), eq(roundParticipants.depositStatus, "held")));
+    } catch (err) {
+      // Per-item isolation, as in both loops above: one participant's failed
+      // refund must not stop the rest of the sweep.
+      console.error(`tick: failed to refund stranded held deposit ${row.depositRef} (participant ${row.id})`, err);
     }
   }
 }

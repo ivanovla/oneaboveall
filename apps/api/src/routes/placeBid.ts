@@ -5,7 +5,7 @@ export function registerPlaceBidRoute(app: FastifyInstance): void {
   app.post<{ Body: { bidderId?: string; amountCents?: number } }>("/bids", async (request, reply) => {
     const { bidderId, amountCents } = request.body ?? {};
 
-    if (!bidderId || typeof amountCents !== "number") {
+    if (!bidderId || typeof bidderId !== "string" || typeof amountCents !== "number") {
       reply.code(400);
       return { error: "bidderId and amountCents are required" };
     }

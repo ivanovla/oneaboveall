@@ -6,13 +6,14 @@ import { buildServer } from "../src/server";
 // imports the two modules mocked below. Plain top-level `const`s would still
 // be in their temporal dead zone when those factories run, so the shared spies
 // must be declared with vi.hoisted(). (Same reasoning as joinRound.test.ts.)
-const { constructEvent, joinRoundMock } = vi.hoisted(() => ({
+const { constructEvent, joinRoundMock, createRefund } = vi.hoisted(() => ({
   constructEvent: vi.fn(),
   joinRoundMock: vi.fn(async () => ({ outcome: "joined" as const })),
+  createRefund: vi.fn(async () => ({ id: "re_1" })),
 }));
 
 vi.mock("../src/stripeClient", () => ({
-  stripe: { webhooks: { constructEvent } },
+  stripe: { webhooks: { constructEvent }, refunds: { create: createRefund } },
   STRIPE_CURRENCY: "usd",
   STRIPE_WEBHOOK_SECRET: "whsec_test",
 }));
@@ -30,6 +31,8 @@ describe("POST /webhooks/stripe", () => {
     constructEvent.mockReset();
     joinRoundMock.mockReset();
     joinRoundMock.mockResolvedValue({ outcome: "joined" as const });
+    createRefund.mockReset();
+    createRefund.mockResolvedValue({ id: "re_1" });
   });
 
   it("rejects a request with no stripe-signature header", async () => {
@@ -90,7 +93,8 @@ describe("POST /webhooks/stripe", () => {
           id: "pi_1",
           amount: 1_000,
           payment_method: "pm_1",
-          metadata: { roundId: "round-1", bidderId: "challenger" },
+          customer: "cus_1",
+          metadata: { kind: "deposit", roundId: "round-1", bidderId: "challenger" },
         },
       },
     });
@@ -112,6 +116,7 @@ describe("POST /webhooks/stripe", () => {
         depositCents: 1_000,
         depositRef: "pi_1",
         paymentMethodRef: "pm_1",
+        customerRef: "cus_1",
       }),
       expect.anything(),
     );
@@ -125,7 +130,8 @@ describe("POST /webhooks/stripe", () => {
           id: "pi_2",
           amount: 2_000,
           payment_method: { id: "pm_2", object: "payment_method" },
-          metadata: { roundId: "round-1", bidderId: "challenger" },
+          customer: { id: "cus_2", object: "customer" },
+          metadata: { kind: "deposit", roundId: "round-1", bidderId: "challenger" },
         },
       },
     });
@@ -140,7 +146,7 @@ describe("POST /webhooks/stripe", () => {
 
     expect(response.statusCode).toBe(200);
     expect(joinRoundMock).toHaveBeenCalledWith(
-      expect.objectContaining({ depositRef: "pi_2", paymentMethodRef: "pm_2" }),
+      expect.objectContaining({ depositRef: "pi_2", paymentMethodRef: "pm_2", customerRef: "cus_2" }),
       expect.anything(),
     );
   });
@@ -191,7 +197,8 @@ describe("POST /webhooks/stripe", () => {
           id: "pi_3",
           amount: 1_000,
           payment_method: "pm_1",
-          metadata: { roundId: "round-1", bidderId: "challenger" },
+          customer: "cus_1",
+          metadata: { kind: "deposit", roundId: "round-1", bidderId: "challenger" },
         },
       },
     });
@@ -207,6 +214,84 @@ describe("POST /webhooks/stripe", () => {
 
     // A 200 here would tell Stripe the deposit was successfully recorded when
     // it wasn't, and the event would never be redelivered.
+    expect(response.statusCode).toBeGreaterThanOrEqual(500);
+  });
+
+  it("ignores a succeeded PaymentIntent whose metadata lacks the kind=deposit marker", async () => {
+    // Round metadata alone is not proof this is a deposit — any other
+    // PaymentIntent this service ever creates could carry similar keys. The
+    // explicit marker is what identifies a deposit.
+    constructEvent.mockReturnValueOnce({
+      type: "payment_intent.succeeded",
+      data: {
+        object: {
+          id: "pi_unmarked",
+          amount: 1_000,
+          payment_method: "pm_1",
+          customer: "cus_1",
+          metadata: { roundId: "round-1", bidderId: "challenger" },
+        },
+      },
+    });
+
+    const app = buildServer();
+    const response = await app.inject({
+      method: "POST",
+      url: "/webhooks/stripe",
+      headers: { "stripe-signature": "valid" },
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(joinRoundMock).not.toHaveBeenCalled();
+    expect(createRefund).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["payment_method", { id: "pi_nopm", amount: 1_000, customer: "cus_1", metadata: { kind: "deposit", roundId: "round-1", bidderId: "challenger" } }],
+    ["customer", { id: "pi_nocus", amount: 1_000, payment_method: "pm_1", metadata: { kind: "deposit", roundId: "round-1", bidderId: "challenger" } }],
+  ])("refunds a collected deposit whose PaymentIntent has no %s, since it can never be joined", async (_field, object) => {
+    // Without a participant row there is nothing that will ever refund this
+    // charge — logging and walking away silently keeps the bidder's money.
+    constructEvent.mockReturnValueOnce({ type: "payment_intent.succeeded", data: { object } });
+
+    const app = buildServer();
+    const response = await app.inject({
+      method: "POST",
+      url: "/webhooks/stripe",
+      headers: { "stripe-signature": "valid" },
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(joinRoundMock).not.toHaveBeenCalled();
+    expect(createRefund).toHaveBeenCalledWith({ payment_intent: (object as { id: string }).id });
+  });
+
+  it("returns a non-2xx when that refund itself fails, so Stripe redelivers", async () => {
+    constructEvent.mockReturnValueOnce({
+      type: "payment_intent.succeeded",
+      data: {
+        object: {
+          id: "pi_nopm",
+          amount: 1_000,
+          customer: "cus_1",
+          metadata: { kind: "deposit", roundId: "round-1", bidderId: "challenger" },
+        },
+      },
+    });
+    createRefund.mockRejectedValueOnce(new Error("stripe unavailable"));
+
+    const app = buildServer();
+    const response = await app.inject({
+      method: "POST",
+      url: "/webhooks/stripe",
+      headers: { "stripe-signature": "valid" },
+      payload: {},
+    });
+
+    // Swallowing this would drop the refund permanently — the charge has no
+    // participant row, so no other path in the system would ever retry it.
     expect(response.statusCode).toBeGreaterThanOrEqual(500);
   });
 });

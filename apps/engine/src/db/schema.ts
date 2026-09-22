@@ -28,7 +28,12 @@ export const rounds = pgTable("rounds", {
 // recomputed from any individual bid amount. paymentMethodRef is the saved
 // Stripe PaymentMethod id (captured from the deposit PaymentIntent via
 // setup_future_usage: "off_session"), used later for the automatic
-// off-session remainder charge if this bidder wins.
+// off-session remainder charge if this bidder wins. customerRef is the Stripe
+// Customer that PaymentMethod is attached to — Stripe only allows a saved
+// PaymentMethod to be reused in a *later, separate* PaymentIntent (which is
+// exactly what the remainder charge is) when both the original and the reuse
+// name the same Customer. Without it the remainder charge fails with
+// payment_method_unattached, which the engine would misread as a decline.
 export const roundParticipants = pgTable("round_participants", {
   id: uuid("id").defaultRandom().primaryKey(),
   roundId: uuid("round_id").notNull().references(() => rounds.id),
@@ -36,6 +41,7 @@ export const roundParticipants = pgTable("round_participants", {
   depositCents: integer("deposit_cents").notNull(),
   depositRef: text("deposit_ref").notNull(),
   paymentMethodRef: text("payment_method_ref").notNull(),
+  customerRef: text("customer_ref").notNull(),
   depositStatus: depositStatusEnum("deposit_status").notNull().default("held"),
   joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({

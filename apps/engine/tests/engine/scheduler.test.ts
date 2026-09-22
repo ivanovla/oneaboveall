@@ -7,6 +7,7 @@ import { placeBid } from "../../src/engine/placeBid";
 import { tick } from "../../src/engine/scheduler";
 import { getCurrentReign, getLatestRound } from "../../src/db/repository";
 import { FakePaymentProvider } from "../../src/payments/FakePaymentProvider";
+import type { PaymentProvider } from "../../src/payments/PaymentProvider";
 import { BIDDING_PHASE_MS, ROUND_MS } from "../../src/domain/config";
 import { eq } from "drizzle-orm";
 
@@ -29,7 +30,7 @@ async function currentRoundId(reignId: string): Promise<string> {
 }
 
 async function join(roundId: string, bidderId: string) {
-  await db.insert(roundParticipants).values({ roundId, bidderId, depositCents: 1_100, depositRef: `pi_${bidderId}`, paymentMethodRef: `pm_${bidderId}` });
+  await db.insert(roundParticipants).values({ roundId, bidderId, depositCents: 1_100, depositRef: `pi_${bidderId}`, paymentMethodRef: `pm_${bidderId}`, customerRef: `cus_${bidderId}` });
 }
 
 describe("tick", () => {
@@ -152,5 +153,97 @@ describe("tick", () => {
     expect(provider.remainderCharges).toHaveLength(1);
     const current = await getCurrentReign();
     expect(current?.occupantId).toBe("winner");
+  });
+
+  it("a provider outage during settlement is logged and isolated — no ban, no forfeit, no next round", async () => {
+    // The counterpart to the engine-level guarantee: a throw from the payment
+    // provider must reach tick()'s per-item catch, not a forfeit/ban path.
+    const startsAt = new Date(2026, 0, 1, 0, 0, 0);
+    const reign = await createInitialReign("champ", startsAt);
+    await join(await currentRoundId(reign.id), "unlucky");
+    await placeBid({ bidderId: "unlucky", amountCents: 11_000, now: new Date(startsAt.getTime() + 1000) });
+
+    const outageProvider: PaymentProvider = {
+      async chargeRemainderOffSession() {
+        throw new Error("stripe unavailable");
+      },
+      async refund() {},
+    };
+
+    await expect(tick(new Date(startsAt.getTime() + BIDDING_PHASE_MS + 1000), outageProvider)).resolves.toBeUndefined();
+
+    expect(await db.select().from(bans)).toHaveLength(0);
+    const [participant] = await db.select().from(roundParticipants).where(eq(roundParticipants.bidderId, "unlucky"));
+    expect(participant.depositStatus).toBe("held");
+    // The round is left mid-settlement rather than closed, so no next round
+    // was started — the accepted "stuck offer" residual gap, which is the
+    // right trade against wrongly punishing a bidder for our outage.
+    expect(await db.select().from(rounds)).toHaveLength(1);
+  });
+
+  it("reconciliation sweep: refunds a deposit left 'held' on an already-closed round", async () => {
+    // This residue can be left behind several ways — closeRoundAndRefundHeld
+    // throwing part-way through its refund loop, joinRound's own race-refund
+    // failing after the row was inserted, or a crash between the two. Nothing
+    // else in the system ever revisits such a row, so without this sweep the
+    // bidder's money stays with us permanently.
+    const startsAt = new Date(2026, 0, 1, 0, 0, 0);
+    const reign = await createInitialReign("champ", startsAt);
+    const roundId = await currentRoundId(reign.id);
+    await join(roundId, "stranded");
+    await db.update(rounds).set({ phase: "closed" }).where(eq(rounds.id, roundId));
+
+    const provider = new FakePaymentProvider();
+    await tick(new Date(startsAt.getTime() + ROUND_MS), provider);
+
+    const [participant] = await db.select().from(roundParticipants).where(eq(roundParticipants.bidderId, "stranded"));
+    expect(participant.depositStatus).toBe("refunded");
+    expect(provider.refunds).toContain("pi_stranded");
+  });
+
+  it("reconciliation sweep: leaves a deposit 'held' (retryable) when the refund fails, and keeps sweeping the rest", async () => {
+    // Per-item isolation, and the same refund-before-mark ordering used
+    // everywhere else: a failed refund must never leave the row claiming
+    // money was returned, or nothing would ever retry it.
+    const startsAt = new Date(2026, 0, 1, 0, 0, 0);
+    const reign = await createInitialReign("champ", startsAt);
+    const roundId = await currentRoundId(reign.id);
+    await join(roundId, "doomed");
+    await join(roundId, "fine");
+    await db.update(rounds).set({ phase: "closed" }).where(eq(rounds.id, roundId));
+
+    const refunded: string[] = [];
+    const flakyProvider: PaymentProvider = {
+      async chargeRemainderOffSession() {
+        return "succeeded";
+      },
+      async refund(depositRef: string) {
+        if (depositRef === "pi_doomed") throw new Error("stripe unavailable");
+        refunded.push(depositRef);
+      },
+    };
+
+    await tick(new Date(startsAt.getTime() + ROUND_MS), flakyProvider);
+
+    const rows = await db.select().from(roundParticipants).where(eq(roundParticipants.roundId, roundId));
+    const byBidder = Object.fromEntries(rows.map((r) => [r.bidderId, r.depositStatus]));
+    expect(byBidder["doomed"]).toBe("held");
+    expect(byBidder["fine"]).toBe("refunded");
+    expect(refunded).toEqual(["pi_fine"]);
+  });
+
+  it("reconciliation sweep: leaves deposits on rounds that are still open alone", async () => {
+    const startsAt = new Date(2026, 0, 1, 0, 0, 0);
+    const reign = await createInitialReign("champ", startsAt);
+    const roundId = await currentRoundId(reign.id);
+    await join(roundId, "bidder");
+
+    const provider = new FakePaymentProvider();
+    // Well before the bidding window closes, so nothing else in tick() runs.
+    await tick(new Date(startsAt.getTime() + 1000), provider);
+
+    const [participant] = await db.select().from(roundParticipants).where(eq(roundParticipants.bidderId, "bidder"));
+    expect(participant.depositStatus).toBe("held");
+    expect(provider.refunds).toHaveLength(0);
   });
 });

@@ -36,7 +36,7 @@ describe("placeBid when placeBidAtomic throws", () => {
     const startsAt = new Date(2026, 0, 1, 0, 0, 0);
     const reign = await createInitialReign("champ", startsAt);
     const round = await getLatestRound(reign.id);
-    await db.insert(roundParticipants).values({ roundId: round!.id, bidderId: "challenger", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1" });
+    await db.insert(roundParticipants).values({ roundId: round!.id, bidderId: "challenger", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1", customerRef: "cus_1" });
 
     await expect(
       placeBid({ bidderId: "challenger", amountCents: 11_000, now: new Date(startsAt.getTime() + 1000) }),

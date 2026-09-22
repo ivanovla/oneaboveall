@@ -10,7 +10,11 @@ const UNIQUE_VIOLATION = "23505";
 // T0 until the scheduler's tick actually snapshots it, which can be well
 // after T0 + BIDDING_PHASE_MS. Phase alone is not authoritative for whether
 // the round is actually still open to new joins.
-function isBiddingOpen(round: { phase: string; startsAt: Date }, now: Date): boolean {
+// Exported so the HTTP join route can apply the same window test *before*
+// creating a PaymentIntent — otherwise every click on a stale page charges a
+// deposit that this module then immediately has to refund, turning the
+// race-refund path below into the normal path.
+export function isBiddingOpen(round: { phase: string; startsAt: Date }, now: Date): boolean {
   if (round.phase !== "bidding") return false;
   const biddingClosesAt = round.startsAt.getTime() + BIDDING_PHASE_MS;
   return round.startsAt.getTime() <= now.getTime() && now.getTime() < biddingClosesAt;
@@ -23,6 +27,7 @@ export async function joinRound(
     depositCents: number;
     depositRef: string;
     paymentMethodRef: string;
+    customerRef: string;
     now: Date;
   },
   provider: PaymentProvider,
@@ -47,6 +52,7 @@ export async function joinRound(
         depositCents: params.depositCents,
         depositRef: params.depositRef,
         paymentMethodRef: params.paymentMethodRef,
+        customerRef: params.customerRef,
         depositStatus: "held",
         joinedAt: params.now,
       })

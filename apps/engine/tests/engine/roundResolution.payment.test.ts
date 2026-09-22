@@ -3,6 +3,7 @@ import { db, pool } from "../../src/db/client";
 import { reigns, rounds, bids, bans, paymentOffers, roundParticipants } from "../../src/db/schema";
 import { resolveBiddingPhaseSnapshot, attemptOfferPayment, settleRound } from "../../src/engine/roundResolution";
 import { FakePaymentProvider } from "../../src/payments/FakePaymentProvider";
+import type { PaymentProvider } from "../../src/payments/PaymentProvider";
 import { eq } from "drizzle-orm";
 import { PAYMENT_ATTEMPT_MS, BIDDING_PHASE_MS, ROUND_MS } from "../../src/domain/config";
 
@@ -22,7 +23,7 @@ afterAll(async () => {
 async function seedRoundWithOffer(startsAt: Date, bidAmount: number, depositCents = 1_000) {
   const [reign] = await db.insert(reigns).values({ occupantId: "champ", priceCents: 10_000, startedAt: startsAt }).returning();
   const [round] = await db.insert(rounds).values({ reignId: reign.id, startsAt, phase: "bidding" }).returning();
-  await db.insert(roundParticipants).values({ roundId: round.id, bidderId: "a", depositCents, depositRef: "pi_a", paymentMethodRef: "pm_a" });
+  await db.insert(roundParticipants).values({ roundId: round.id, bidderId: "a", depositCents, depositRef: "pi_a", paymentMethodRef: "pm_a", customerRef: "cus_a" });
   const [bid] = await db
     .insert(bids)
     .values({ roundId: round.id, bidderId: "a", amountCents: bidAmount, placedAt: new Date(startsAt.getTime() + 1000) })
@@ -70,7 +71,7 @@ describe("attemptOfferPayment — success path", () => {
   it("refunds every other held participant in the round on payment", async () => {
     const startsAt = new Date(2026, 0, 1, 0, 0, 0);
     const { roundId, offerId } = await seedRoundWithOffer(startsAt, 11_000);
-    await db.insert(roundParticipants).values({ roundId, bidderId: "loser", depositCents: 1_050, depositRef: "pi_loser", paymentMethodRef: "pm_loser" });
+    await db.insert(roundParticipants).values({ roundId, bidderId: "loser", depositCents: 1_050, depositRef: "pi_loser", paymentMethodRef: "pm_loser", customerRef: "cus_loser" });
     const provider = new FakePaymentProvider();
     const now = new Date(startsAt.getTime() + BIDDING_PHASE_MS + 1000);
 
@@ -99,7 +100,7 @@ describe("attemptOfferPayment — failure path (forfeit, ban, cascade)", () => {
   it("forfeits the deposit, bans the bidder, and cascades to the next-highest bid when the off-session charge fails", async () => {
     const startsAt = new Date(2026, 0, 1, 0, 0, 0);
     const { roundId, offerId } = await seedRoundWithOffer(startsAt, 11_000);
-    await db.insert(roundParticipants).values({ roundId, bidderId: "second-in-line", depositCents: 1_050, depositRef: "pi_second", paymentMethodRef: "pm_second" });
+    await db.insert(roundParticipants).values({ roundId, bidderId: "second-in-line", depositCents: 1_050, depositRef: "pi_second", paymentMethodRef: "pm_second", customerRef: "cus_second" });
     await db.insert(bids).values({ roundId, bidderId: "second-in-line", amountCents: 10_500, placedAt: new Date(startsAt.getTime() + 500) });
     const provider = new FakePaymentProvider();
     provider.failNextRemainderCharge("failed");
@@ -162,7 +163,7 @@ describe("attemptOfferPayment — failure path (forfeit, ban, cascade)", () => {
   it("closes the round instead of cascading once the round's own boundary has passed", async () => {
     const startsAt = new Date(2026, 0, 1, 0, 0, 0);
     const { roundId, offerId } = await seedRoundWithOffer(startsAt, 11_000);
-    await db.insert(roundParticipants).values({ roundId, bidderId: "second-in-line", depositCents: 1_050, depositRef: "pi_second", paymentMethodRef: "pm_second" });
+    await db.insert(roundParticipants).values({ roundId, bidderId: "second-in-line", depositCents: 1_050, depositRef: "pi_second", paymentMethodRef: "pm_second", customerRef: "cus_second" });
     await db.insert(bids).values({ roundId, bidderId: "second-in-line", amountCents: 10_500, placedAt: new Date(startsAt.getTime() + 500) });
     const provider = new FakePaymentProvider();
     provider.failNextRemainderCharge("failed");
@@ -183,7 +184,7 @@ describe("attemptOfferPayment — failure path (forfeit, ban, cascade)", () => {
       ["tie-earlier", 10_500, 500],
       ["low-bidder", 10_000, 100],
     ] as const) {
-      await db.insert(roundParticipants).values({ roundId, bidderId, depositCents: 1_000, depositRef: `pi_${bidderId}`, paymentMethodRef: `pm_${bidderId}` });
+      await db.insert(roundParticipants).values({ roundId, bidderId, depositCents: 1_000, depositRef: `pi_${bidderId}`, paymentMethodRef: `pm_${bidderId}`, customerRef: `cus_${bidderId}` });
       await db.insert(bids).values({ roundId, bidderId, amountCents, placedAt: new Date(startsAt.getTime() + offsetMs) });
     }
     const provider = new FakePaymentProvider();
@@ -202,9 +203,9 @@ describe("attemptOfferPayment — failure path (forfeit, ban, cascade)", () => {
   it("never cascades to a bid placed after the bidding window closed", async () => {
     const startsAt = new Date(2026, 0, 1, 0, 0, 0);
     const { roundId, offerId, snapshotAt } = await seedRoundWithOffer(startsAt, 11_000);
-    await db.insert(roundParticipants).values({ roundId, bidderId: "in-window", depositCents: 1_050, depositRef: "pi_in", paymentMethodRef: "pm_in" });
+    await db.insert(roundParticipants).values({ roundId, bidderId: "in-window", depositCents: 1_050, depositRef: "pi_in", paymentMethodRef: "pm_in", customerRef: "cus_in" });
     const [inWindow] = await db.insert(bids).values({ roundId, bidderId: "in-window", amountCents: 10_500, placedAt: new Date(startsAt.getTime() + 500) }).returning();
-    await db.insert(roundParticipants).values({ roundId, bidderId: "late", depositCents: 2_000, depositRef: "pi_late", paymentMethodRef: "pm_late" });
+    await db.insert(roundParticipants).values({ roundId, bidderId: "late", depositCents: 2_000, depositRef: "pi_late", paymentMethodRef: "pm_late", customerRef: "cus_late" });
     await db.insert(bids).values({ roundId, bidderId: "late", amountCents: 20_000, placedAt: new Date(snapshotAt.getTime() + 1000) });
     const provider = new FakePaymentProvider();
     provider.failNextRemainderCharge("failed");
@@ -220,7 +221,7 @@ describe("attemptOfferPayment — failure path (forfeit, ban, cascade)", () => {
   it("a second concurrent call for the same offer is a safe no-op — only one ban row and one cascade result", async () => {
     const startsAt = new Date(2026, 0, 1, 0, 0, 0);
     const { roundId, offerId } = await seedRoundWithOffer(startsAt, 11_000);
-    await db.insert(roundParticipants).values({ roundId, bidderId: "second-in-line", depositCents: 1_050, depositRef: "pi_second", paymentMethodRef: "pm_second" });
+    await db.insert(roundParticipants).values({ roundId, bidderId: "second-in-line", depositCents: 1_050, depositRef: "pi_second", paymentMethodRef: "pm_second", customerRef: "cus_second" });
     await db.insert(bids).values({ roundId, bidderId: "second-in-line", amountCents: 10_500, placedAt: new Date(startsAt.getTime() + 500) });
     const provider = new FakePaymentProvider();
     provider.failNextRemainderCharge("failed");
@@ -243,7 +244,7 @@ describe("cross-cutting: cascade then payment must not un-forfeit the earlier no
   it("does not refund a deposit already forfeited by an earlier cascade step when the eventual winner pays", async () => {
     const startsAt = new Date(2026, 0, 1, 0, 0, 0);
     const { roundId, offerId } = await seedRoundWithOffer(startsAt, 11_000);
-    await db.insert(roundParticipants).values({ roundId, bidderId: "second-in-line", depositCents: 1_050, depositRef: "pi_second", paymentMethodRef: "pm_second" });
+    await db.insert(roundParticipants).values({ roundId, bidderId: "second-in-line", depositCents: 1_050, depositRef: "pi_second", paymentMethodRef: "pm_second", customerRef: "cus_second" });
     await db.insert(bids).values({ roundId, bidderId: "second-in-line", amountCents: 10_500, placedAt: new Date(startsAt.getTime() + 500) });
     const provider = new FakePaymentProvider();
     provider.failNextRemainderCharge("failed");
@@ -275,7 +276,7 @@ describe("settleRound", () => {
   it("follows a cascade through to a later payer without the caller doing anything else", async () => {
     const startsAt = new Date(2026, 0, 1, 0, 0, 0);
     const { roundId, offerId } = await seedRoundWithOffer(startsAt, 11_000);
-    await db.insert(roundParticipants).values({ roundId, bidderId: "second-in-line", depositCents: 1_050, depositRef: "pi_second", paymentMethodRef: "pm_second" });
+    await db.insert(roundParticipants).values({ roundId, bidderId: "second-in-line", depositCents: 1_050, depositRef: "pi_second", paymentMethodRef: "pm_second", customerRef: "cus_second" });
     await db.insert(bids).values({ roundId, bidderId: "second-in-line", amountCents: 10_500, placedAt: new Date(startsAt.getTime() + 500) });
     const provider = new FakePaymentProvider();
     provider.failNextRemainderCharge("failed"); // only the FIRST attempt (bidder "a") fails
@@ -295,5 +296,58 @@ describe("settleRound", () => {
 
     const result = await settleRound(offerId, new Date(startsAt.getTime() + BIDDING_PHASE_MS + 1000), provider);
     expect(result.outcome).toBe("round-closed");
+  });
+
+  it("reports losing the claim race as 'already-processed', distinct from 'round-closed'", async () => {
+    // The scheduler starts the next round on "round-closed". If losing a
+    // concurrent claim reported that too, both the winner of the race and the
+    // loser would each start a next round for the same reign.
+    const startsAt = new Date(2026, 0, 1, 0, 0, 0);
+    const { offerId } = await seedRoundWithOffer(startsAt, 11_000);
+    const provider = new FakePaymentProvider();
+
+    // Stand in for a concurrent caller that already claimed this offer.
+    await db.update(paymentOffers).set({ status: "processing" }).where(eq(paymentOffers.id, offerId));
+
+    const result = await settleRound(offerId, new Date(startsAt.getTime() + BIDDING_PHASE_MS + 1000), provider);
+    expect(result.outcome).toBe("already-processed");
+    expect(provider.remainderCharges).toHaveLength(0);
+  });
+
+  it("charges the remainder against the participant's saved Stripe customer, not just the payment method", async () => {
+    // Stripe refuses to reuse a saved PaymentMethod from a separate
+    // PaymentIntent unless that intent names the Customer it is attached to;
+    // without the customerRef every winner's remainder charge would fail and
+    // be misread as a decline (forfeit + ban).
+    const startsAt = new Date(2026, 0, 1, 0, 0, 0);
+    const { offerId } = await seedRoundWithOffer(startsAt, 11_000, 1_000);
+    const provider = new FakePaymentProvider();
+
+    await settleRound(offerId, new Date(startsAt.getTime() + BIDDING_PHASE_MS + 1000), provider);
+
+    expect(provider.remainderCharges).toEqual([{ customerRef: "cus_a", paymentMethodRef: "pm_a", amountCents: 10_000 }]);
+  });
+
+  it("never forfeits or bans when the provider throws an infrastructure error rather than declining", async () => {
+    // A provider that throws is signalling "our side broke" (outage, rotated
+    // key, rate limit, bad request), not "this bidder's card was refused".
+    // The bidder must keep their deposit and stay unbanned; the exception is
+    // left to propagate to the scheduler's per-item catch, which logs it.
+    const startsAt = new Date(2026, 0, 1, 0, 0, 0);
+    const { roundId, offerId } = await seedRoundWithOffer(startsAt, 11_000);
+    const throwingProvider: PaymentProvider = {
+      async chargeRemainderOffSession() {
+        throw new Error("stripe unavailable");
+      },
+      async refund() {},
+    };
+
+    await expect(
+      settleRound(offerId, new Date(startsAt.getTime() + BIDDING_PHASE_MS + 1000), throwingProvider),
+    ).rejects.toThrow("stripe unavailable");
+
+    const [participant] = await db.select().from(roundParticipants).where(eq(roundParticipants.roundId, roundId));
+    expect(participant.depositStatus).toBe("held");
+    expect(await db.select().from(bans)).toHaveLength(0);
   });
 });

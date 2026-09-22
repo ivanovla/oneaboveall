@@ -26,7 +26,7 @@ async function seedRound(startsAt: Date) {
 }
 
 async function join(roundId: string, bidderId: string, depositRef: string) {
-  await db.insert(roundParticipants).values({ roundId, bidderId, depositCents: 1_100, depositRef, paymentMethodRef: `pm_${bidderId}` });
+  await db.insert(roundParticipants).values({ roundId, bidderId, depositCents: 1_100, depositRef, paymentMethodRef: `pm_${bidderId}`, customerRef: `cus_${bidderId}` });
 }
 
 describe("resolveBiddingPhaseSnapshot", () => {

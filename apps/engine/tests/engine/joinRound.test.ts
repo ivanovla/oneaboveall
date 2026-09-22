@@ -28,7 +28,7 @@ describe("joinRound", () => {
     const provider = new FakePaymentProvider();
 
     const result = await joinRound(
-      { roundId, bidderId: "a", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1", now: new Date() },
+      { roundId, bidderId: "a", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1", customerRef: "cus_1", now: new Date() },
       provider,
     );
 
@@ -43,9 +43,9 @@ describe("joinRound", () => {
     const roundId = await seedRound();
     const provider = new FakePaymentProvider();
 
-    await joinRound({ roundId, bidderId: "a", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1", now: new Date() }, provider);
+    await joinRound({ roundId, bidderId: "a", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1", customerRef: "cus_1", now: new Date() }, provider);
     const second = await joinRound(
-      { roundId, bidderId: "a", depositCents: 1_000, depositRef: "pi_2", paymentMethodRef: "pm_2", now: new Date() },
+      { roundId, bidderId: "a", depositCents: 1_000, depositRef: "pi_2", paymentMethodRef: "pm_2", customerRef: "cus_2", now: new Date() },
       provider,
     );
 
@@ -59,8 +59,8 @@ describe("joinRound", () => {
     const provider = new FakePaymentProvider();
 
     const [a, b] = await Promise.all([
-      joinRound({ roundId, bidderId: "a", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1", now: new Date() }, provider),
-      joinRound({ roundId, bidderId: "a", depositCents: 1_000, depositRef: "pi_2", paymentMethodRef: "pm_2", now: new Date() }, provider),
+      joinRound({ roundId, bidderId: "a", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1", customerRef: "cus_1", now: new Date() }, provider),
+      joinRound({ roundId, bidderId: "a", depositCents: 1_000, depositRef: "pi_2", paymentMethodRef: "pm_2", customerRef: "cus_2", now: new Date() }, provider),
     ]);
 
     const outcomes = [a.outcome, b.outcome].sort();
@@ -76,7 +76,7 @@ describe("joinRound", () => {
     const provider = new FakePaymentProvider();
 
     const result = await joinRound(
-      { roundId, bidderId: "a", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1", now: new Date() },
+      { roundId, bidderId: "a", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1", customerRef: "cus_1", now: new Date() },
       provider,
     );
 
@@ -90,7 +90,7 @@ describe("joinRound", () => {
     const provider = new FakePaymentProvider();
     await expect(
       joinRound(
-        { roundId: "00000000-0000-0000-0000-000000000000", bidderId: "a", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1", now: new Date() },
+        { roundId: "00000000-0000-0000-0000-000000000000", bidderId: "a", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1", customerRef: "cus_1", now: new Date() },
         provider,
       ),
     ).rejects.toThrow("Round not found");
@@ -116,7 +116,7 @@ describe("joinRound", () => {
 
     await expect(
       joinRound(
-        { roundId, bidderId: "a", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1", now: new Date() },
+        { roundId, bidderId: "a", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1", customerRef: "cus_1", now: new Date() },
         throwingProvider,
       ),
     ).rejects.toThrow("stripe unavailable");
@@ -136,7 +136,7 @@ describe("joinRound", () => {
     const provider = new FakePaymentProvider();
 
     const result = await joinRound(
-      { roundId: round.id, bidderId: "a", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1", now: new Date() },
+      { roundId: round.id, bidderId: "a", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1", customerRef: "cus_1", now: new Date() },
       provider,
     );
 
@@ -150,9 +150,9 @@ describe("joinRound", () => {
     const roundId = await seedRound();
     const provider = new FakePaymentProvider();
 
-    await joinRound({ roundId, bidderId: "a", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1", now: new Date() }, provider);
+    await joinRound({ roundId, bidderId: "a", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1", customerRef: "cus_1", now: new Date() }, provider);
     const second = await joinRound(
-      { roundId, bidderId: "a", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1", now: new Date() },
+      { roundId, bidderId: "a", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1", customerRef: "cus_1", now: new Date() },
       provider,
     );
 
@@ -169,9 +169,9 @@ describe("joinRound", () => {
     const roundId = await seedRound();
     const provider = new FakePaymentProvider();
 
-    await joinRound({ roundId, bidderId: "a", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1", now: new Date() }, provider);
+    await joinRound({ roundId, bidderId: "a", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1", customerRef: "cus_1", now: new Date() }, provider);
     const second = await joinRound(
-      { roundId, bidderId: "a", depositCents: 1_000, depositRef: "pi_2", paymentMethodRef: "pm_2", now: new Date() },
+      { roundId, bidderId: "a", depositCents: 1_000, depositRef: "pi_2", paymentMethodRef: "pm_2", customerRef: "cus_2", now: new Date() },
       provider,
     );
 
@@ -213,7 +213,7 @@ describe("joinRound", () => {
 
     try {
       const result = await joinRound(
-        { roundId, bidderId: "a", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1", now: new Date() },
+        { roundId, bidderId: "a", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1", customerRef: "cus_1", now: new Date() },
         provider,
       );
 
