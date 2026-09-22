@@ -1,6 +1,9 @@
 import { desc, isNotNull, isNull } from "drizzle-orm";
 import { db } from "../db/client";
 import { reigns } from "../db/schema";
+import { getCurrentReign, getLatestRound, getQueueLeader } from "../db/repository";
+import { calculateDeposit } from "../domain/deposit";
+import { BIDDING_PHASE_MS } from "../domain/config";
 
 export async function getScene(_now: Date) {
   const [champion] = await db.select().from(reigns).where(isNull(reigns.endedAt)).limit(1);
@@ -38,4 +41,28 @@ export async function getLeaderboard() {
   return [...byOccupant.entries()]
     .map(([occupantId, stats]) => ({ occupantId, ...stats }))
     .sort((a, b) => b.totalDurationMs - a.totalDurationMs);
+}
+
+export async function getCurrentRoundInfo(_now: Date): Promise<{
+  roundId: string;
+  phase: "bidding" | "resolving" | "payment" | "closed";
+  currentLeaderCents: number;
+  depositCents: number;
+  biddingClosesAt: Date;
+} | null> {
+  const reign = await getCurrentReign();
+  if (!reign) return null;
+
+  const round = await getLatestRound(reign.id);
+  if (!round) return null;
+
+  const topBid = await getQueueLeader(round.id);
+
+  return {
+    roundId: round.id,
+    phase: round.phase,
+    currentLeaderCents: topBid ? topBid.amountCents : reign.priceCents,
+    depositCents: calculateDeposit(reign.priceCents),
+    biddingClosesAt: new Date(round.startsAt.getTime() + BIDDING_PHASE_MS),
+  };
 }

@@ -1,9 +1,13 @@
 import { describe, it, expect, afterEach, afterAll } from "vitest";
 import { db, pool } from "../../src/db/client";
-import { reigns } from "../../src/db/schema";
-import { getScene, getLeaderboard } from "../../src/queries/publicScene";
+import { reigns, rounds } from "../../src/db/schema";
+import { getScene, getLeaderboard, getCurrentRoundInfo } from "../../src/queries/publicScene";
+import { createInitialReign } from "../../src/engine/bootstrap";
+import { getLatestRound } from "../../src/db/repository";
+import { BIDDING_PHASE_MS } from "../../src/domain/config";
 
 afterEach(async () => {
+  await db.delete(rounds);
   await db.delete(reigns);
 });
 
@@ -56,5 +60,25 @@ describe("getLeaderboard", () => {
     expect(alice?.totalDurationMs).toBe(3 * day);
 
     expect(board[0].occupantId).toBe("alice"); // longer cumulative time than bob, ranked first
+  });
+});
+
+describe("getCurrentRoundInfo", () => {
+  it("returns null when no reign exists", async () => {
+    expect(await getCurrentRoundInfo(new Date())).toBeNull();
+  });
+
+  it("returns the round id, phase, leader price, and fixed deposit for the current round", async () => {
+    const startsAt = new Date(2026, 0, 1, 0, 0, 0);
+    const reign = await createInitialReign("champ", startsAt);
+    const round = await getLatestRound(reign.id);
+
+    const info = await getCurrentRoundInfo(new Date(startsAt.getTime() + 1000));
+    expect(info).not.toBeNull();
+    expect(info?.roundId).toBe(round!.id);
+    expect(info?.phase).toBe("bidding");
+    expect(info?.currentLeaderCents).toBe(reign.priceCents); // no bids yet — leader is the champion's price
+    expect(info?.depositCents).toBe(Math.round(reign.priceCents * 0.10));
+    expect(info?.biddingClosesAt).toEqual(new Date(startsAt.getTime() + BIDDING_PHASE_MS));
   });
 });
