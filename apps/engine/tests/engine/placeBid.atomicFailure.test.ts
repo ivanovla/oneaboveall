@@ -1,9 +1,6 @@
 // Isolated in its own file because it mocks the repository module: placeBidAtomic
-// is forced to throw so the deposit-recovery path in placeBid can be exercised.
-// There is no clean way to provoke a genuine throw from a healthy database once
-// validateBidAmount rejects out-of-range amounts, which is the point of that
-// validation — but a DB outage, a constraint violation or exhausted SERIALIZABLE
-// retries all still surface here as a throw, with the deposit already charged.
+// is forced to throw so placeBid's error path can be exercised without a
+// clean way to provoke a genuine throw from a healthy database.
 import { describe, it, expect, afterEach, afterAll, vi } from "vitest";
 
 vi.mock("../../src/db/repository", async (importOriginal) => {
@@ -17,12 +14,13 @@ vi.mock("../../src/db/repository", async (importOriginal) => {
 });
 
 import { db, pool } from "../../src/db/client";
-import { reigns, rounds, bids, bans } from "../../src/db/schema";
+import { reigns, rounds, bids, bans, roundParticipants } from "../../src/db/schema";
 import { createInitialReign } from "../../src/engine/bootstrap";
 import { placeBid } from "../../src/engine/placeBid";
-import { FakePaymentProvider } from "../../src/payments/FakePaymentProvider";
+import { getLatestRound } from "../../src/db/repository";
 
 afterEach(async () => {
+  await db.delete(roundParticipants);
   await db.delete(bids);
   await db.delete(bans);
   await db.delete(rounds);
@@ -34,23 +32,15 @@ afterAll(async () => {
 });
 
 describe("placeBid when placeBidAtomic throws", () => {
-  it("refunds the already-charged deposit and returns a failure instead of throwing", async () => {
+  it("propagates the failure — nothing was charged here, so there is nothing to refund", async () => {
     const startsAt = new Date(2026, 0, 1, 0, 0, 0);
-    await createInitialReign("champ", startsAt);
-    const provider = new FakePaymentProvider();
+    const reign = await createInitialReign("champ", startsAt);
+    const round = await getLatestRound(reign.id);
+    await db.insert(roundParticipants).values({ roundId: round!.id, bidderId: "challenger", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1" });
 
-    const result = await placeBid(
-      { bidderId: "challenger", amountCents: 11_000, now: new Date(startsAt.getTime() + 1000) },
-      provider,
-    );
-
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error("expected rejection");
-    expect(result.reason).toContain("refunded");
-
-    // The deposit was charged before the failure — it must not be stranded.
-    expect(provider.charges).toHaveLength(1);
-    expect(provider.refunds).toEqual([provider.charges[0].ref]);
+    await expect(
+      placeBid({ bidderId: "challenger", amountCents: 11_000, now: new Date(startsAt.getTime() + 1000) }),
+    ).rejects.toThrow("simulated database failure");
 
     expect(await db.select().from(bids)).toHaveLength(0);
   });
