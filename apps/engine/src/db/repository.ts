@@ -1,11 +1,12 @@
 import { and, desc, asc, eq, gt, lte, isNull } from "drizzle-orm";
 import { db } from "./client";
-import { reigns, rounds, bids, bans } from "./schema";
+import { reigns, rounds, bids, bans, roundParticipants } from "./schema";
 import { validateBidAmount } from "../domain/bidValidation";
 
 export type Reign = typeof reigns.$inferSelect;
 export type Round = typeof rounds.$inferSelect;
 export type Bid = typeof bids.$inferSelect;
+export type RoundParticipant = typeof roundParticipants.$inferSelect;
 
 export async function getCurrentReign(): Promise<Reign | null> {
   const [reign] = await db.select().from(reigns).where(isNull(reigns.endedAt)).limit(1);
@@ -37,6 +38,15 @@ export async function getQueueLeader(roundId: string, asOf?: Date): Promise<Bid 
   return top ?? null;
 }
 
+export async function getRoundParticipant(roundId: string, bidderId: string): Promise<RoundParticipant | null> {
+  const [row] = await db
+    .select()
+    .from(roundParticipants)
+    .where(and(eq(roundParticipants.roundId, roundId), eq(roundParticipants.bidderId, bidderId)))
+    .limit(1);
+  return row ?? null;
+}
+
 export async function isBanned(bidderId: string, now: Date): Promise<boolean> {
   const [row] = await db
     .select()
@@ -52,8 +62,6 @@ export async function placeBidAtomic(params: {
   roundId: string;
   bidderId: string;
   amountCents: number;
-  depositCents: number;
-  depositRef: string;
   // When omitted the column's DEFAULT now() (the database clock) is used.
   // placeBid passes its own `now` so that a bid's placedAt agrees with the
   // instant the bidding-window guard was evaluated against — the snapshot's
@@ -73,6 +81,18 @@ export async function placeBidAtomic(params: {
           const [reign] = await tx.select().from(reigns).where(eq(reigns.id, round.reignId)).limit(1);
           if (!reign) return { ok: false, reason: "Reign not found." };
 
+          // Authoritative check: fast-path duplicate of this lives in placeBid.ts,
+          // but this is the one that actually guards correctness inside the
+          // transaction, same rationale as the amount/phase checks above it.
+          const [participant] = await tx
+            .select()
+            .from(roundParticipants)
+            .where(and(eq(roundParticipants.roundId, params.roundId), eq(roundParticipants.bidderId, params.bidderId)))
+            .limit(1);
+          if (!participant || participant.depositStatus !== "held") {
+            return { ok: false, reason: "Join this round (pay the deposit) before placing a bid." };
+          }
+
           const [topBid] = await tx
             .select()
             .from(bids)
@@ -90,9 +110,6 @@ export async function placeBidAtomic(params: {
               roundId: params.roundId,
               bidderId: params.bidderId,
               amountCents: params.amountCents,
-              depositCents: params.depositCents,
-              depositRef: params.depositRef,
-              depositStatus: "held",
               ...(params.placedAt ? { placedAt: params.placedAt } : {}),
             })
             .returning();

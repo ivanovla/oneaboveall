@@ -1,9 +1,10 @@
 import { describe, it, expect, afterEach, afterAll } from "vitest";
 import { db, pool } from "../../src/db/client";
-import { reigns, rounds, bids, bans } from "../../src/db/schema";
-import { getCurrentReign, getLatestRound, getQueueLeader, isBanned } from "../../src/db/repository";
+import { reigns, rounds, bids, bans, roundParticipants } from "../../src/db/schema";
+import { getCurrentReign, getLatestRound, getQueueLeader, isBanned, getRoundParticipant } from "../../src/db/repository";
 
 afterEach(async () => {
+  await db.delete(roundParticipants);
   await db.delete(bids);
   await db.delete(bans);
   await db.delete(rounds);
@@ -52,9 +53,9 @@ describe("getQueueLeader", () => {
     const [reign] = await db.insert(reigns).values({ occupantId: "u1", priceCents: 10_000, startedAt: new Date() }).returning();
     const [round] = await db.insert(rounds).values({ reignId: reign.id, startsAt: new Date() }).returning();
     await db.insert(bids).values([
-      { roundId: round.id, bidderId: "a", amountCents: 11_000, depositCents: 1_100, depositRef: "d1", placedAt: new Date(2026, 0, 1, 10, 0, 1) },
-      { roundId: round.id, bidderId: "b", amountCents: 12_000, depositCents: 1_200, depositRef: "d2", placedAt: new Date(2026, 0, 1, 10, 0, 2) },
-      { roundId: round.id, bidderId: "c", amountCents: 12_000, depositCents: 1_200, depositRef: "d3", placedAt: new Date(2026, 0, 1, 10, 0, 0) },
+      { roundId: round.id, bidderId: "a", amountCents: 11_000, placedAt: new Date(2026, 0, 1, 10, 0, 1) },
+      { roundId: round.id, bidderId: "b", amountCents: 12_000, placedAt: new Date(2026, 0, 1, 10, 0, 2) },
+      { roundId: round.id, bidderId: "c", amountCents: 12_000, placedAt: new Date(2026, 0, 1, 10, 0, 0) },
     ]);
     const leader = await getQueueLeader(round.id);
     expect(leader?.bidderId).toBe("c"); // tied on amount with b, but placed earliest
@@ -65,8 +66,8 @@ describe("getQueueLeader", () => {
     const [round] = await db.insert(rounds).values({ reignId: reign.id, startsAt: new Date() }).returning();
     const windowClose = new Date(2026, 0, 1, 12, 0, 0);
     await db.insert(bids).values([
-      { roundId: round.id, bidderId: "in-window", amountCents: 11_000, depositCents: 1_100, depositRef: "d1", placedAt: new Date(windowClose.getTime() - 1000) },
-      { roundId: round.id, bidderId: "late", amountCents: 99_000, depositCents: 9_900, depositRef: "d2", placedAt: new Date(windowClose.getTime() + 1000) },
+      { roundId: round.id, bidderId: "in-window", amountCents: 11_000, placedAt: new Date(windowClose.getTime() - 1000) },
+      { roundId: round.id, bidderId: "late", amountCents: 99_000, placedAt: new Date(windowClose.getTime() + 1000) },
     ]);
 
     // Without asOf the late (higher) bid leads; with asOf it is invisible.
@@ -87,5 +88,23 @@ describe("isBanned", () => {
     await db.insert(bans).values({ bidderId: "u1", bannedUntil: new Date(2026, 0, 10) });
     expect(await isBanned("u1", new Date(2026, 0, 5))).toBe(true);
     expect(await isBanned("u1", new Date(2026, 0, 15))).toBe(false);
+  });
+});
+
+describe("getRoundParticipant", () => {
+  it("returns null when the bidder hasn't joined this round", async () => {
+    const [reign] = await db.insert(reigns).values({ occupantId: "u1", priceCents: 10_000, startedAt: new Date() }).returning();
+    const [round] = await db.insert(rounds).values({ reignId: reign.id, startsAt: new Date() }).returning();
+    expect(await getRoundParticipant(round.id, "nobody")).toBeNull();
+  });
+
+  it("returns the participant row once joined", async () => {
+    const [reign] = await db.insert(reigns).values({ occupantId: "u1", priceCents: 10_000, startedAt: new Date() }).returning();
+    const [round] = await db.insert(rounds).values({ reignId: reign.id, startsAt: new Date() }).returning();
+    await db.insert(roundParticipants).values({ roundId: round.id, bidderId: "a", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1" });
+
+    const participant = await getRoundParticipant(round.id, "a");
+    expect(participant?.depositStatus).toBe("held");
+    expect(participant?.depositCents).toBe(1_000);
   });
 });
