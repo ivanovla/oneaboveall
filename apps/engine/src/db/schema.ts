@@ -1,4 +1,4 @@
-import { pgTable, text, integer, timestamp, uuid, pgEnum, index } from "drizzle-orm/pg-core";
+import { pgTable, text, integer, timestamp, uuid, pgEnum, index, uniqueIndex } from "drizzle-orm/pg-core";
 
 // "applied" = the winner's deposit was credited toward the final price rather
 // than returned; distinct from "refunded" so accounting rollups don't count it
@@ -22,14 +22,34 @@ export const rounds = pgTable("rounds", {
   phase: roundPhaseEnum("phase").notNull().default("bidding"),
 });
 
+// One row per (round, bidder): the fixed, once-per-round deposit that unlocks
+// bidding for that bidder in that round. depositCents is fixed at
+// calculateDeposit(reign.priceCents) when the row is created — never
+// recomputed from any individual bid amount. paymentMethodRef is the saved
+// Stripe PaymentMethod id (captured from the deposit PaymentIntent via
+// setup_future_usage: "off_session"), used later for the automatic
+// off-session remainder charge if this bidder wins.
+export const roundParticipants = pgTable("round_participants", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  roundId: uuid("round_id").notNull().references(() => rounds.id),
+  bidderId: text("bidder_id").notNull(),
+  depositCents: integer("deposit_cents").notNull(),
+  depositRef: text("deposit_ref").notNull(),
+  paymentMethodRef: text("payment_method_ref").notNull(),
+  depositStatus: depositStatusEnum("deposit_status").notNull().default("held"),
+  joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  // Enforces "one deposit per bidder per round" at the database level — this
+  // is what makes joinRound's insert-or-detect-duplicate idempotent against a
+  // Stripe webhook redelivering the same payment_intent.succeeded event.
+  roundBidderIdx: uniqueIndex("round_participants_round_id_bidder_id_idx").on(table.roundId, table.bidderId),
+}));
+
 export const bids = pgTable("bids", {
   id: uuid("id").defaultRandom().primaryKey(),
   roundId: uuid("round_id").notNull().references(() => rounds.id),
   bidderId: text("bidder_id").notNull(),
   amountCents: integer("amount_cents").notNull(),
-  depositCents: integer("deposit_cents").notNull(),
-  depositRef: text("deposit_ref").notNull(),
-  depositStatus: depositStatusEnum("deposit_status").notNull().default("held"),
   placedAt: timestamp("placed_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   // Supports the leader query (WHERE round_id = ? ORDER BY amount_cents DESC,
