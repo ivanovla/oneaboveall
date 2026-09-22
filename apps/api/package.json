@@ -11,7 +11,8 @@
   "dependencies": {
     "engine": "*",
     "fastify": "^4.28.1",
-    "dotenv": "^17.4.2"
+    "dotenv": "^17.4.2",
+    "stripe": "^17.4.0"
   },
   "devDependencies": {
     "@types/node": "^22.5.0",
