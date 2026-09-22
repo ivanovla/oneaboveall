@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "../db/client";
-import { rounds, paymentOffers, bids, bans } from "../db/schema";
+import { rounds, paymentOffers, bids, bans, roundParticipants } from "../db/schema";
 import { getQueueLeader } from "../db/repository";
 import { installChampion } from "./installChampion";
 import { PAYMENT_ATTEMPT_MS, ROUND_MS, BAN_DURATION_MS, BIDDING_PHASE_MS } from "../domain/config";
@@ -18,11 +18,15 @@ export async function resolveBiddingPhaseSnapshot(
   // passes the real clock so a late tick can detect that the payment window it
   // is about to hand out has already elapsed.
   executedAt: Date = snapshotAt,
-): Promise<{ outcome: "empty-closed" | "offer-created" | "already-resolving" }> {
-  // Claim-before-snapshot: symmetric to confirmPayment's claim-before-charge and
-  // resolveExpiredOffer's claim-before-expire guards. Without this, two overlapping
-  // scheduler ticks (or two worker instances) both seeing phase = "bidding" would
-  // both proceed, each creating its own paymentOffers row for the same round.
+): Promise<
+  | { outcome: "empty-closed" }
+  | { outcome: "already-resolving" }
+  | { outcome: "offer-created"; offerId: string }
+> {
+  // Claim-before-snapshot: symmetric to attemptOfferPayment's claim-before-charge
+  // guard below. Without this, two overlapping scheduler ticks (or two worker
+  // instances) both seeing phase = "bidding" would both proceed, each creating
+  // its own paymentOffers row for the same round.
   const claimed = await db
     .update(rounds)
     .set({ phase: "resolving" })
@@ -30,6 +34,11 @@ export async function resolveBiddingPhaseSnapshot(
     .returning();
 
   if (claimed.length === 0) {
+    // Someone else is already resolving this round (or it is past "bidding"
+    // altogether). Deliberately NOT "empty-closed": that outcome tells the
+    // caller the round reached a terminal state and the next round should be
+    // started. Losing the claim race means the winner of that race owns the
+    // round's fate — this call must do nothing at all.
     return { outcome: "already-resolving" };
   }
   const round = claimed[0];
@@ -50,41 +59,58 @@ export async function resolveBiddingPhaseSnapshot(
 
   if (expiresAt.getTime() <= executedAt.getTime()) {
     // The scheduler is running late enough that the payment offer would be born
-    // already expired: the very next loop of this same tick would pick it up,
-    // forfeit the leader's deposit and ban them for 3 rounds — punishing a
-    // bidder who was never notified and never had a usable moment to pay. That
-    // is an infrastructure failure, not a bidder failure. Hand nobody an offer,
-    // give every held deposit in the round back, and close the round in the
-    // same terminal state as an empty one (champion unchanged; the caller
-    // starts the next day's round).
+    // already expired — an infrastructure failure, not a bidder failure. Hand
+    // nobody an offer, give every held deposit in the round back, and close
+    // the round in the same terminal state as an empty one.
     await closeRoundAndRefundHeld(roundId, provider);
     return { outcome: "empty-closed" };
   }
 
-  await db.insert(paymentOffers).values({
-    roundId,
-    bidId: leader.id,
-    offeredAt: snapshotAt,
-    expiresAt,
-    status: "pending",
-  });
+  const [offer] = await db
+    .insert(paymentOffers)
+    .values({
+      roundId,
+      bidId: leader.id,
+      offeredAt: snapshotAt,
+      expiresAt,
+      status: "pending",
+    })
+    .returning();
   await db.update(rounds).set({ phase: "payment" }).where(eq(rounds.id, roundId));
 
-  return { outcome: "offer-created" };
+  return { outcome: "offer-created", offerId: offer.id };
 }
 
-export async function confirmPayment(
+// Attempts the off-session remainder charge for one payment offer and settles
+// it fully, one way or the other:
+//   - "paid": the charge succeeded — champion installed, other held deposits
+//     refunded.
+//   - "cascaded": the charge failed (declined or requires_action — treated
+//     identically) — this bidder is forfeited and banned, and the next-highest
+//     still-held bid gets its own new pending offer (nextOfferId).
+//   - "round-closed": the charge failed and there was nobody left to cascade
+//     to, or the round's own boundary had already passed.
+//   - "already-processed": a concurrent call already claimed this offer.
+//
+// Replaces the old confirmPayment/resolveExpiredOffer split — see this
+// plan's Task 7 rationale for why that split no longer applies now that the
+// remainder charge is automatic and off-session instead of something a
+// human confirms interactively.
+export async function attemptOfferPayment(
   offerId: string,
   now: Date,
   provider: PaymentProvider,
   onInstalled?: (occupantId: string) => void,
-): Promise<{ outcome: "paid" | "already-processed" }> {
+): Promise<
+  | { outcome: "paid" }
+  | { outcome: "cascaded"; nextOfferId: string }
+  | { outcome: "round-closed" }
+  | { outcome: "already-processed" }
+> {
   // Claim-before-charge: this single conditional UPDATE is what makes concurrent
-  // duplicate calls safe. Postgres row-level locking means a second concurrent
-  // UPDATE targeting the same row blocks until the first commits, then re-evaluates
-  // `status = 'pending'` against the now-"processing" row and affects 0 rows — no
-  // SERIALIZABLE isolation or retry loop needed for this pattern, unlike the
-  // select-then-insert races in placeBidAtomic/createInitialReign/installChampion.
+  // duplicate calls safe — a second concurrent UPDATE targeting the same row
+  // blocks until the first commits, then re-evaluates `status = 'pending'`
+  // against the now-"processing" row and affects 0 rows.
   const claimed = await db
     .update(paymentOffers)
     .set({ status: "processing" })
@@ -99,119 +125,135 @@ export async function confirmPayment(
   const [bid] = await db.select().from(bids).where(eq(bids.id, offer.bidId)).limit(1);
   if (!bid) throw new Error("Bid not found for offer.");
 
-  const remainderCents = bid.amountCents - bid.depositCents;
-  const paid = await provider.chargeRemainder(bid.bidderId, remainderCents, bid.depositRef);
-  if (!paid) {
-    // Release the claim so a legitimate future attempt (or the scheduled expiry
-    // cascade) can still process this offer — do not leave it stuck in "processing".
-    await db.update(paymentOffers).set({ status: "pending" }).where(eq(paymentOffers.id, offerId));
-    throw new Error("chargeRemainder returned false inside confirmPayment — caller should not confirm an unsuccessful charge.");
-  }
-
-  await db.update(paymentOffers).set({ status: "paid" }).where(eq(paymentOffers.id, offerId));
-  await db.update(rounds).set({ phase: "closed" }).where(eq(rounds.id, offer.roundId));
-  // "applied", not "refunded": the winner's deposit is credited toward the
-  // final price (chargeRemainder bills amount - deposit), it is never given
-  // back. Labelling it "refunded" would overstate refunds in any accounting
-  // rollup over deposit_status by exactly the winning deposit, every round.
-  await db.update(bids).set({ depositStatus: "applied" }).where(eq(bids.id, bid.id));
-
-  const otherBids = await db.select().from(bids).where(eq(bids.roundId, offer.roundId));
-  for (const other of otherBids) {
-    // Only refund bids still "held" — a bid that already forfeited its deposit
-    // in an earlier cascade step (Finding 1, Task 12 review) must stay forfeited;
-    // refunding it here would un-do the non-payment penalty for a banned bidder.
-    if (other.id === bid.id || other.depositStatus !== "held") continue;
-    await provider.refund(other.depositRef);
-    await db.update(bids).set({ depositStatus: "refunded" }).where(eq(bids.id, other.id));
-  }
-
-  await installChampion(bid.bidderId, bid.amountCents, now, onInstalled);
-
-  return { outcome: "paid" };
-}
-
-export async function resolveExpiredOffer(
-  offerId: string,
-  now: Date,
-  provider: PaymentProvider,
-): Promise<{ outcome: "cascaded" | "round-closed" | "already-processed" }> {
-  // Claim-before-expire: symmetric to confirmPayment's claim-before-charge guard
-  // (Finding 2, Task 12 review). Without this, a payment landing in the same
-  // instant the scheduler's tick expires the same offer would both succeed:
-  // the payer gets installed as champion AND banned with a forfeited deposit,
-  // and a duplicate cascade offer gets created on an already-closed round.
-  const claimed = await db
-    .update(paymentOffers)
-    .set({ status: "expired" })
-    .where(and(eq(paymentOffers.id, offerId), eq(paymentOffers.status, "pending")))
-    .returning();
-
-  if (claimed.length === 0) {
-    return { outcome: "already-processed" };
-  }
-  const offer = claimed[0];
-
   const [round] = await db.select().from(rounds).where(eq(rounds.id, offer.roundId)).limit(1);
   if (!round) throw new Error("Round not found.");
 
-  const [failedBid] = await db.select().from(bids).where(eq(bids.id, offer.bidId)).limit(1);
+  const [participant] = await db
+    .select()
+    .from(roundParticipants)
+    .where(and(eq(roundParticipants.roundId, offer.roundId), eq(roundParticipants.bidderId, bid.bidderId)))
+    .limit(1);
+  if (!participant) throw new Error("Round participant not found for offer's bidder.");
 
-  await db.update(bids).set({ depositStatus: "forfeited" }).where(eq(bids.id, offer.bidId));
-  await db.insert(bans).values({ bidderId: failedBid.bidderId, bannedUntil: new Date(now.getTime() + BAN_DURATION_MS) });
+  const remainderCents = bid.amountCents - participant.depositCents;
+  const chargeResult = await provider.chargeRemainderOffSession(participant.paymentMethodRef, remainderCents);
+
+  if (chargeResult === "succeeded") {
+    await db.update(paymentOffers).set({ status: "paid" }).where(eq(paymentOffers.id, offerId));
+    await db.update(rounds).set({ phase: "closed" }).where(eq(rounds.id, offer.roundId));
+    // "applied", not "refunded": the winner's deposit is credited toward the
+    // final price (the charge is amount - deposit), it is never given back.
+    await db.update(roundParticipants).set({ depositStatus: "applied" }).where(eq(roundParticipants.id, participant.id));
+
+    const otherParticipants = await db.select().from(roundParticipants).where(eq(roundParticipants.roundId, offer.roundId));
+    for (const other of otherParticipants) {
+      // Only refund participants still "held" — one already forfeited in an
+      // earlier cascade step must stay forfeited; refunding it here would
+      // un-do the non-payment penalty for a banned bidder.
+      if (other.id === participant.id || other.depositStatus !== "held") continue;
+      await provider.refund(other.depositRef);
+      await db.update(roundParticipants).set({ depositStatus: "refunded" }).where(eq(roundParticipants.id, other.id));
+    }
+
+    await installChampion(bid.bidderId, bid.amountCents, now, onInstalled);
+    return { outcome: "paid" };
+  }
+
+  // chargeResult is "requires_action" or "failed" — both treated as
+  // non-payment. Per the approved design, a bank requiring extra
+  // authentication is not special-cased into a grace period; it bans exactly
+  // like an outright decline, since building a retry/notification path is
+  // explicitly out of scope for this feature.
+  await db.update(roundParticipants).set({ depositStatus: "forfeited" }).where(eq(roundParticipants.id, participant.id));
+  await db.insert(bans).values({ bidderId: bid.bidderId, bannedUntil: new Date(now.getTime() + BAN_DURATION_MS) });
 
   const roundBoundary = new Date(round.startsAt.getTime() + ROUND_MS);
   if (now.getTime() >= roundBoundary.getTime()) {
-    await closeRoundAndRefundHeld(round.id, provider, offer.bidId);
+    await closeRoundAndRefundHeld(round.id, provider, participant.id);
     return { outcome: "round-closed" };
   }
 
-  const remainingBids = await db
+  const biddingClosedAt = new Date(round.startsAt.getTime() + BIDDING_PHASE_MS);
+  const remainingBids = await db.select().from(bids).where(eq(bids.roundId, offer.roundId));
+  const heldParticipants = await db
     .select()
-    .from(bids)
-    .where(eq(bids.roundId, offer.roundId));
+    .from(roundParticipants)
+    .where(and(eq(roundParticipants.roundId, offer.roundId), eq(roundParticipants.depositStatus, "held")));
+  const heldBidderIds = new Set(heldParticipants.map((p) => p.bidderId));
+
   // Same window pin as the snapshot's `asOf`: a bid placed after the bidding
   // window closed must not be able to win the round through the cascade either.
-  const biddingClosedAt = new Date(round.startsAt.getTime() + BIDDING_PHASE_MS);
   const nextCandidates = remainingBids.filter(
-    (b) => b.id !== offer.bidId && b.depositStatus === "held" && b.placedAt.getTime() <= biddingClosedAt.getTime(),
+    (b) => b.id !== offer.bidId && heldBidderIds.has(b.bidderId) && b.placedAt.getTime() <= biddingClosedAt.getTime(),
   );
   nextCandidates.sort((a, b) => b.amountCents - a.amountCents || a.placedAt.getTime() - b.placedAt.getTime());
   const next = nextCandidates[0];
 
   if (!next) {
-    await closeRoundAndRefundHeld(round.id, provider, offer.bidId);
+    await closeRoundAndRefundHeld(round.id, provider, participant.id);
     return { outcome: "round-closed" };
   }
 
   const attemptExpiry = new Date(now.getTime() + PAYMENT_ATTEMPT_MS);
-  const expiresAt = attemptExpiry.getTime() < roundBoundary.getTime() ? attemptExpiry : roundBoundary;
+  const nextExpiresAt = attemptExpiry.getTime() < roundBoundary.getTime() ? attemptExpiry : roundBoundary;
 
-  await db.insert(paymentOffers).values({
-    roundId: round.id,
-    bidId: next.id,
-    offeredAt: now,
-    expiresAt,
-    status: "pending",
-  });
+  const [nextOffer] = await db
+    .insert(paymentOffers)
+    .values({
+      roundId: round.id,
+      bidId: next.id,
+      offeredAt: now,
+      // expiresAt is retained for the scheduler's crash-recovery poll (Task 8)
+      // but is not expected to be reached in normal operation — settleRound
+      // attempts this new offer immediately, in the same call chain.
+      expiresAt: nextExpiresAt,
+      status: "pending",
+    })
+    .returning();
 
-  return { outcome: "cascaded" };
+  return { outcome: "cascaded", nextOfferId: nextOffer.id };
 }
 
-// Closes the round and gives back every deposit still "held" on it. Bids that
-// already forfeited (a non-payer earlier in the cascade) or were already
-// refunded are left alone.
+// Attempts offerId and, on a cascade, immediately attempts the next offer too
+// — repeating until the round is settled. This is what a caller should use
+// in practice; attemptOfferPayment on its own only performs a single step.
+export async function settleRound(
+  offerId: string,
+  now: Date,
+  provider: PaymentProvider,
+  onInstalled?: (occupantId: string) => void,
+): Promise<{ outcome: "paid" } | { outcome: "round-closed" }> {
+  let currentOfferId = offerId;
+  for (;;) {
+    const result = await attemptOfferPayment(currentOfferId, now, provider, onInstalled);
+    if (result.outcome === "paid" || result.outcome === "round-closed") {
+      return result;
+    }
+    if (result.outcome === "already-processed") {
+      // A concurrent settleRound (or the scheduler's crash-recovery poll)
+      // already claimed this offer — nothing more for this call to do.
+      return { outcome: "round-closed" };
+    }
+    currentOfferId = result.nextOfferId;
+  }
+}
+
+// Closes the round and gives back every deposit still "held" on it. A
+// participant that already forfeited (a non-payer earlier in the cascade) or
+// was already refunded is left alone — depositStatus !== "held" already
+// guards that; excludeParticipantId is a belt-and-suspenders extra for the
+// participant whose forfeit just happened moments earlier in the same call.
 async function closeRoundAndRefundHeld(
   roundId: string,
   provider: PaymentProvider,
-  excludeBidId?: string,
+  excludeParticipantId?: string,
 ): Promise<void> {
   await db.update(rounds).set({ phase: "closed" }).where(eq(rounds.id, roundId));
 
-  const remaining = await db.select().from(bids).where(eq(bids.roundId, roundId));
-  for (const b of remaining) {
-    if (b.id === excludeBidId || b.depositStatus !== "held") continue;
-    await provider.refund(b.depositRef);
-    await db.update(bids).set({ depositStatus: "refunded" }).where(eq(bids.id, b.id));
+  const remaining = await db.select().from(roundParticipants).where(eq(roundParticipants.roundId, roundId));
+  for (const p of remaining) {
+    if (p.id === excludeParticipantId || p.depositStatus !== "held") continue;
+    await provider.refund(p.depositRef);
+    await db.update(roundParticipants).set({ depositStatus: "refunded" }).where(eq(roundParticipants.id, p.id));
   }
 }
