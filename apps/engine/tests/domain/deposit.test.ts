@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { calculateDeposit } from "../../src/domain/deposit";
 
 describe("calculateDeposit", () => {
-  it("is 10% of the bid", () => {
+  it("is 10% of the round's opening price", () => {
     expect(calculateDeposit(10_000)).toBe(1_000);
   });
 
