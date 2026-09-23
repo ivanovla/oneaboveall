@@ -150,20 +150,48 @@ function JoinPaymentForm({ apiBaseUrl, roundId, onJoined }: { apiBaseUrl: string
 }
 
 /**
- * Normalises what a user typed into a whole-dollar amount by keeping only the
- * LEADING run of digits and truncating at the first non-digit.
+ * What the bid field is allowed to display as the user types: digits plus at
+ * most one decimal point.
+ *
+ * The decimal point is deliberately NOT stripped here. This input is a
+ * controlled component (`value={bidValue}`), so every keystroke's onChange
+ * sees the *previous accepted value* with one character inserted — not the
+ * user's full intent. Any rule that drops the "." therefore drops it again on
+ * every subsequent keystroke, and the digits after it simply append to the
+ * digits before it. Typing "15.50" one character at a time under a
+ * strip-the-dot rule goes "1" -> "15" -> "15" -> "155" -> "1550", which is
+ * the original 100x bug, reproduced keystroke by keystroke. A single
+ * whole-string change event hides this completely, which is why the earlier
+ * truncate-at-first-non-digit attempt looked fixed and was not.
+ *
+ * So the field simply shows what was typed, and the whole-dollar rounding
+ * happens once, at submit time, in `toWholeDollarCents` below.
+ */
+function toBidInputValue(raw: string): string {
+  const cleaned = raw.replace(/[^\d.]/g, "");
+  const firstDot = cleaned.indexOf(".");
+  if (firstDot === -1) return cleaned;
+  // Keep the first ".", drop any later ones, so "1.5.5" can't reach parseFloat.
+  return `${cleaned.slice(0, firstDot + 1)}${cleaned.slice(firstDot + 1).replace(/\./g, "")}`;
+}
+
+/**
+ * Converts the displayed field value to the whole-dollar amount in cents that
+ * actually gets bid.
  *
  * Whole-dollar bidding is this site's existing convention (`AuctionFlow.tsx`
- * filters the same way) and isn't in question here — cents are never accepted.
- * What matters is what a user who types "15.50" by mistake is left with.
- * Stripping every non-digit anywhere in the string concatenated across the
- * decimal point and produced "1550", silently turning an intended $15.50 into
- * a $1,550 bid. Truncating produces "15" instead: still not what they meant,
- * but visibly so — the field shows exactly the number that will be submitted,
- * rather than one a hundred times larger.
+ * works the same way) and isn't in question — cents are never accepted. What
+ * changed is how a typed decimal collapses to one: flooring "15.50" gives
+ * $15, the honest reading of what the user typed and visibly what the field
+ * shows, instead of the $1,550 that digit-concatenation produced.
+ *
+ * An empty field, a lone ".", or anything else parseFloat can't read yields
+ * 0 — the same guard the previous `digits === "" ? 0 : ...` provided, so an
+ * empty bid still reaches the server and gets its normal validation error.
  */
-function toWholeDollarDigits(raw: string): string {
-  return raw.replace(/\D[\s\S]*$/, "");
+function toWholeDollarCents(raw: string): number {
+  const parsed = Number.parseFloat(raw);
+  return Number.isFinite(parsed) ? Math.floor(parsed) * 100 : 0;
 }
 
 function BidForm({ apiBaseUrl, currentLeaderCents }: { apiBaseUrl: string; currentLeaderCents: number }) {
@@ -172,10 +200,9 @@ function BidForm({ apiBaseUrl, currentLeaderCents }: { apiBaseUrl: string; curre
   const [error, setError] = useState<string | null>(null);
 
   async function submitBid() {
-    // Already enforced by the input's onChange; re-applied here so the
-    // submitted amount can never disagree with what the field displays.
-    const digits = toWholeDollarDigits(bidValue);
-    const amountCents = digits === "" ? 0 : Number(digits) * 100;
+    // The one place whole-dollar rounding happens — deliberately at submit,
+    // not in onChange, so the field can keep showing exactly what was typed.
+    const amountCents = toWholeDollarCents(bidValue);
     setStatus("submitting");
     setError(null);
 
@@ -216,7 +243,7 @@ function BidForm({ apiBaseUrl, currentLeaderCents }: { apiBaseUrl: string; curre
           id="live-auction-bid"
           type="text"
           value={bidValue}
-          onChange={(e) => setBidValue(toWholeDollarDigits(e.target.value))}
+          onChange={(e) => setBidValue(toBidInputValue(e.target.value))}
           style={{ display: "block", width: "100%", marginTop: 8, padding: "12px 14px", background: "transparent", border: "1px solid var(--gold-soft)", color: "var(--fg)" }}
         />
       </div>

@@ -68,12 +68,28 @@ export function buildServer(): FastifyInstance {
   //
   // The comma-separated form is checked too: @fastify/cors accepts a list,
   // and a stray "*" anywhere in it is the same mistake.
-  if (corsOrigin.split(",").some((origin) => origin.trim() === "*")) {
+  const allowedOrigins = corsOrigin
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter((origin) => origin !== "");
+  if (allowedOrigins.some((origin) => origin === "*")) {
     throw new Error(
       'CORS_ORIGIN must not be "*": this server sends credentialed CORS responses, which browsers reject against a wildcard origin. Set it to the frontend\'s exact origin (e.g. http://127.0.0.1:4321).',
     );
   }
-  app.register(fastifyCors, { origin: corsOrigin, credentials: true });
+  if (allowedOrigins.length === 0) {
+    throw new Error("CORS_ORIGIN is required.");
+  }
+  // Passed as an ARRAY, not the raw string. @fastify/cors treats a string
+  // `origin` as a literal value echoed verbatim into
+  // Access-Control-Allow-Credentials' companion header — it does not split on
+  // commas — so a comma-separated CORS_ORIGIN would have emitted
+  // `Access-Control-Allow-Origin: http://a,https://b`, a header no browser
+  // accepts. With an array, @fastify/cors matches the request's own Origin
+  // against the list and echoes back just that one (plus `Vary: Origin`),
+  // which is the only form that works alongside `credentials: true`. A single
+  // origin is simply a one-element array.
+  app.register(fastifyCors, { origin: allowedOrigins, credentials: true });
   app.register(fastifyCookie);
   // Apple's Sign in with Apple callback uses response_mode: "form_post" —
   // the browser POSTs the callback (code, state, and the one-time "user"

@@ -215,7 +215,7 @@ describe("LiveAuction", () => {
     await waitFor(() => expect(screen.getByText("Bid must be at least $1 above the current leader.")).toBeInTheDocument());
   });
 
-  it("truncates a mistyped decimal at the decimal point instead of concatenating across it", async () => {
+  it("floors a decimal typed one keystroke at a time, instead of concatenating across the point", async () => {
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       const path = new URL(url).pathname;
       if (path === "/current-round") return { ok: true, json: async () => ({ roundId: "round-1", phase: "bidding", currentLeaderCents: 100_000, depositCents: 10_000, biddingClosesAt: "2026-09-23T12:00:00.000Z" }) };
@@ -230,19 +230,31 @@ describe("LiveAuction", () => {
     await waitFor(() => expect(screen.getByLabelText(/your bid/i)).toBeInTheDocument());
 
     const bidInput = screen.getByLabelText(/your bid/i) as HTMLInputElement;
-    // Bidding here is whole dollars only (AuctionFlow.tsx does the same), so
-    // "15.50" can't be accepted as $15.50 either way. What this locks in is
-    // WHICH whole-dollar value a mistyped decimal collapses to: truncating at
-    // the first non-digit leaves "15", where stripping every non-digit
-    // anywhere in the string used to leave "1550" — an amount 100x larger
-    // than intended, which the user had no obvious reason to re-read before
-    // clicking Place bid.
-    fireEvent.change(bidInput, { target: { value: "15.50" } });
-    expect(bidInput.value).toBe("15");
 
+    // Typed ONE CHARACTER AT A TIME, which is the only way this bug shows up.
+    // The input is controlled (value={bidValue}), so each keystroke's onChange
+    // sees the previously *accepted* value plus one character — not the user's
+    // full intent. Under the earlier "strip/truncate the decimal point" rule
+    // the "." was dropped on every keystroke and the digits after it appended
+    // to the digits before it: "1" -> "15" -> "15" -> "155" -> "1550",
+    // submitting 155_000 cents. A single fireEvent.change with the whole
+    // "15.50" string never exercises that and passed against the broken code.
+    //
+    // Each event's value is built from the input's CURRENT value plus the
+    // next character — exactly what a browser does — rather than a
+    // pre-computed cumulative string. That distinction is the whole point: a
+    // pre-computed string would silently assume the field had accepted every
+    // earlier character, which is the assumption that was false.
+    const expectedFieldAfterEach = ["1", "15", "15.", "15.5", "15.50"];
+    [..."15.50"].forEach((char, i) => {
+      fireEvent.change(bidInput, { target: { value: bidInput.value + char } });
+      expect(bidInput.value).toBe(expectedFieldAfterEach[i]);
+    });
+
+    // The field shows exactly what was typed; the whole-dollar rounding
+    // happens once, at submit: Math.floor(15.50) * 100.
     fireEvent.click(screen.getByText("Place bid"));
 
-    // $15, matching exactly what the field now displays.
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith("http://api.test/bids", {
         method: "POST",
@@ -251,6 +263,30 @@ describe("LiveAuction", () => {
         body: JSON.stringify({ amountCents: 1_500 }),
       }),
     );
+    // Belt and braces: the 100x amount must not appear in any call.
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "http://api.test/bids",
+      expect.objectContaining({ body: JSON.stringify({ amountCents: 155_000 }) }),
+    );
+  });
+
+  it("rejects stray characters and a second decimal point as they are typed", async () => {
+    global.fetch = mockFetchSequence({
+      currentRound: { roundId: "round-1", phase: "bidding", currentLeaderCents: 100_000, depositCents: 10_000, biddingClosesAt: "2026-09-23T12:00:00.000Z" },
+      participation: { joined: true },
+    }) as unknown as typeof fetch;
+
+    const { fireEvent, screen, waitFor } = await import("@testing-library/react");
+    render(<LiveAuction apiBaseUrl="http://api.test" />);
+    await waitFor(() => expect(screen.getByLabelText(/your bid/i)).toBeInTheDocument());
+
+    const bidInput = screen.getByLabelText(/your bid/i) as HTMLInputElement;
+
+    fireEvent.change(bidInput, { target: { value: "1a2" } });
+    expect(bidInput.value).toBe("12"); // letters never enter the field
+
+    fireEvent.change(bidInput, { target: { value: "12.5.5" } });
+    expect(bidInput.value).toBe("12.55"); // only the first "." survives, so parseFloat stays sane
   });
 
   // A non-2xx from /rounds/:id/join carries `{ error }` and no clientSecret.
