@@ -1,0 +1,4 @@
+-----BEGIN PRIVATE KEY-----
+(paste the contents of the .p8 file Apple gives you when you create a
+"Sign in with Apple" key in the Apple Developer portal here)
+-----END PRIVATE KEY-----

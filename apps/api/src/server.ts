@@ -10,6 +10,7 @@ import { registerJoinRoundRoute } from "./routes/joinRound";
 import { registerPlaceBidRoute } from "./routes/placeBid";
 import { registerStripeWebhookRoute } from "./routes/stripeWebhook";
 import { registerGoogleAuthRoutes } from "./routes/authGoogle";
+import { registerAppleAuthRoutes } from "./routes/authApple";
 import { stripe, STRIPE_CURRENCY, STRIPE_WEBHOOK_SECRET } from "./stripeClient";
 import { StripePaymentProvider } from "./payments/StripePaymentProvider";
 
@@ -100,6 +101,7 @@ export function buildServer(): FastifyInstance {
   registerPlaceBidRoute(app);
   registerStripeWebhookRoute(app, stripe, STRIPE_WEBHOOK_SECRET, stripeProvider);
   registerGoogleAuthRoutes(app);
+  registerAppleAuthRoutes(app);
 
   return app;
 }
