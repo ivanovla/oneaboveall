@@ -51,8 +51,6 @@ type Screen =
   | "missed"
   | "top";
 
-type PaymentProvider = "ru" | "intl";
-
 /**
  * Renders `closesAt` as a live HH:MM:SS countdown.
  *
@@ -284,7 +282,6 @@ export default function AuctionFlow({
   // Derived purely from props, so the server-rendered HTML and the browser's
   // first hydration render agree — see useCountdown's note on `client:idle`.
   const [bidValue, setBidValue] = useState(() => String(Math.round(minBidCents / 100)));
-  const [paymentProvider, setPaymentProvider] = useState<PaymentProvider>("ru");
   const [consent, setConsent] = useState(false);
   const theme = useThemeToggle();
 
@@ -315,15 +312,7 @@ export default function AuctionFlow({
   // Same bidCents/depositCents carried over from the bid screen — no re-parsing.
   const remainderCents = bidCents - depositCents;
 
-  const payProviderLabel =
-    paymentProvider === "ru"
-      ? "YooKassa · charged in rubles at the CBR rate"
-      : "Stripe · charged in US dollars";
-
-  const geoNote =
-    paymentProvider === "ru"
-      ? "IP detected as Russian — YooKassa selected. You can switch manually."
-      : "Visa / Mastercard, charged in US dollars.";
+  const payProviderLabel = "Stripe · charged in US dollars";
 
   function closeOverlay() {
     setScreen("closed");
@@ -531,37 +520,22 @@ export default function AuctionFlow({
           </div>
           <div style={{ marginTop: 20 }}>
             <div style={fieldLabelStyle}>Deposit payment method</div>
-            <div style={{ display: "flex", gap: 9, marginTop: 9 }}>
-              <button
-                onClick={() => setPaymentProvider("ru")}
-                style={{
-                  flex: 1,
-                  padding: 14,
-                  fontSize: 12,
-                  border: "1px solid",
-                  borderColor: paymentProvider === "ru" ? "var(--gold)" : "var(--line)",
-                  background: paymentProvider === "ru" ? "var(--gold)" : "var(--panel-2)",
-                  color: paymentProvider === "ru" ? "var(--btn-fg)" : "var(--fg)",
-                }}
-              >
-                YooKassa · RU
-              </button>
-              <button
-                onClick={() => setPaymentProvider("intl")}
-                style={{
-                  flex: 1,
-                  padding: 14,
-                  fontSize: 12,
-                  border: "1px solid",
-                  borderColor: paymentProvider === "intl" ? "var(--gold)" : "var(--line)",
-                  background: paymentProvider === "intl" ? "var(--gold)" : "var(--panel-2)",
-                  color: paymentProvider === "intl" ? "var(--btn-fg)" : "var(--fg)",
-                }}
-              >
-                Stripe · Intl
-              </button>
+            <div
+              style={{
+                marginTop: 9,
+                padding: 14,
+                fontSize: 12,
+                border: "1px solid var(--gold)",
+                background: "var(--gold)",
+                color: "var(--btn-fg)",
+                textAlign: "center",
+              }}
+            >
+              Stripe
             </div>
-            <div style={{ marginTop: 9, fontSize: 11, color: "var(--fg-faint)" }}>{geoNote}</div>
+            <div style={{ marginTop: 9, fontSize: 11, color: "var(--fg-faint)" }}>
+              Visa / Mastercard, charged in US dollars.
+            </div>
           </div>
           <button onClick={() => setScreen("lead")} style={primaryButtonStyle}>
             Place deposit

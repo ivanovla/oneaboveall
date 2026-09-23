@@ -36,7 +36,7 @@
 }
 
 * { box-sizing: border-box; -webkit-font-smoothing: antialiased; }
-html, body { margin: 0; padding: 0; background: var(--void); font-family: Manrope, Helvetica, Arial, sans-serif; }
+html, body { margin: 0; padding: 0; background: var(--void); color: var(--fg); font-family: Manrope, Helvetica, Arial, sans-serif; }
 a { color: var(--gold); text-decoration: none; }
 a:hover { color: var(--fg); }
 button { font-family: inherit; cursor: pointer; border: 0; background: none; color: inherit; }
