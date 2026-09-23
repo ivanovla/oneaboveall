@@ -876,10 +876,26 @@ Create `apps/api/src/auth/appleClientSecret.ts`:
 import { readFileSync } from "node:fs";
 import { SignJWT, importPKCS8 } from "jose";
 
-const privateKeyPem = readFileSync(process.env.APPLE_PRIVATE_KEY_PATH!, "utf8");
+// Read lazily (on first real call), not at module top level. This file is
+// imported transitively by every apps/api test that builds the server
+// (server.ts -> authApple.ts -> here) — an eager top-level readFileSync
+// would make EVERY test in the workspace require a real private-key file on
+// disk just to load the module, even tests that never touch Apple sign-in
+// and already mock this module's export away. A lazy, cached read means
+// only a genuine call to generateAppleClientSecret() (which only this
+// file's own test exercises for real — every other test mocks the export
+// entirely, so the mock intercepts the import before this code ever runs)
+// needs the file to exist.
+let cachedPrivateKeyPem: string | null = null;
+function getPrivateKeyPem(): string {
+  if (!cachedPrivateKeyPem) {
+    cachedPrivateKeyPem = readFileSync(process.env.APPLE_PRIVATE_KEY_PATH!, "utf8");
+  }
+  return cachedPrivateKeyPem;
+}
 
 export async function generateAppleClientSecret(): Promise<string> {
-  const key = await importPKCS8(privateKeyPem, "ES256");
+  const key = await importPKCS8(getPrivateKeyPem(), "ES256");
   return new SignJWT({})
     .setProtectedHeader({ alg: "ES256", kid: process.env.APPLE_KEY_ID! })
     .setIssuer(process.env.APPLE_TEAM_ID!)
