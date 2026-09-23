@@ -51,13 +51,28 @@ function parseApiDate(value: string, field: string): Date {
   return date;
 }
 
+/**
+ * Picks what to render as a person's name.
+ *
+ * `occupantId` is a `users.id` UUID now that occupants are real OAuth-signed-in
+ * users, so rendering it directly would put `3f2b8c4e-9d01-…` in the champion
+ * banner and the leaderboard. The API resolves the display name server-side
+ * (joining `users.name`) and already falls back to the raw id itself when an
+ * occupant has no user row or an empty name; this second fallback only covers
+ * an API response that omits the field entirely, which keeps the pre-join
+ * behavior rather than rendering "undefined".
+ */
+function displayName(api: { occupantId: string; occupantName?: string }): string {
+  return api.occupantName && api.occupantName !== "" ? api.occupantName : api.occupantId;
+}
+
 function adaptRetinueMember(api: ApiRetinueMember, index: number): Person {
   const startedAt = parseApiDate(api.startedAt, `retinue[${index}].startedAt`);
   const endedAt = parseApiDate(api.endedAt, `retinue[${index}].endedAt`);
 
   return {
     occupantId: api.occupantId,
-    name: api.occupantId,
+    name: displayName(api),
     priceCents: api.priceCents,
     since: startedAt,
     heldLabel: formatDurationLabel(endedAt.getTime() - startedAt.getTime()),
@@ -77,7 +92,7 @@ export function adaptScene(api: ApiSceneResponse): Scene | null {
   return {
     champion: {
       occupantId: api.champion.occupantId,
-      name: api.champion.occupantId,
+      name: displayName(api.champion),
       priceCents: api.champion.priceCents,
       since: parseApiDate(api.champion.since, "champion.since"),
       // Deliberately empty: the champion's reign is still running, so the
@@ -100,7 +115,7 @@ export function adaptLeaderboardRow(api: ApiLeaderboardRow): LeaderboardRow {
 
   return {
     occupantId: api.occupantId,
-    name: api.occupantId,
+    name: displayName(api),
     rounds: api.rounds,
     totalSpentCents: api.totalSpentCents,
     totalDurationLabel: formatDurationLabel(api.totalDurationMs),
