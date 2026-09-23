@@ -101,74 +101,78 @@ export function registerGoogleAuthRoutes(app: FastifyInstance): void {
     // cookie's 600s maxAge on Google's consent screen is a real,
     // non-adversarial way to hit the first branch). The real cause is still
     // logged server-side via request.log.error for debugging.
-    //
-    // The whole handler runs inside a try/finally so the state cookie is
-    // cleared on every exit path, not just the success path — it's single
-    // use regardless of outcome, so there's no reason to leave a stale one
-    // sitting in the browser after a failed attempt.
-    try {
-      const raw = request.cookies[OAUTH_STATE_COOKIE_NAME];
-      if (!raw) {
-        request.log.error("Google OAuth callback: missing oauth state cookie");
-        reply.redirect(SIGN_IN_FAILED_REDIRECT);
-        return;
-      }
-      const [expectedState, codeVerifier] = raw.split(".");
+    const raw = request.cookies[OAUTH_STATE_COOKIE_NAME];
 
-      const client = await getGoogleClient();
-      const params = client.callbackParams(request.raw);
+    // Cleared here, immediately after reading it and before any
+    // reply.redirect(...) call below (success or error) — it's single-use
+    // regardless of outcome, so there's no reason to leave a stale one
+    // sitting in the browser after this point. This must happen before any
+    // redirect: reply.redirect(...) calls reply.send() internally, which
+    // writes the response headers synchronously, so a clearCookie() issued
+    // afterwards (e.g. from a try/finally wrapping the redirect) has no
+    // effect — the headers have already been flushed. An earlier version of
+    // this handler cleared it in a `finally` block after the redirect calls
+    // and silently failed to clear the cookie on every path as a result.
+    reply.clearCookie(OAUTH_STATE_COOKIE_NAME, { path: "/" });
 
-      if (params.state !== expectedState) {
-        request.log.error("Google OAuth callback: state mismatch");
-        reply.redirect(SIGN_IN_FAILED_REDIRECT);
-        return;
-      }
-
-      let claims: { sub: string; email?: string; name?: string };
-      try {
-        const tokenSet = await client.callback(GOOGLE_CALLBACK_URL, params, {
-          state: expectedState,
-          code_verifier: codeVerifier,
-        });
-        claims = tokenSet.claims();
-      } catch (err) {
-        request.log.error({ err }, "Google OAuth callback failed");
-        reply.redirect(SIGN_IN_FAILED_REDIRECT);
-        return;
-      }
-
-      const [existing] = await db
-        .select()
-        .from(users)
-        .where(and(eq(users.provider, "google"), eq(users.providerId, claims.sub)))
-        .limit(1);
-
-      const user =
-        existing ??
-        (
-          await db
-            .insert(users)
-            .values({
-              provider: "google",
-              providerId: claims.sub,
-              email: claims.email ?? "",
-              name: claims.name ?? "",
-            })
-            .returning()
-        )[0];
-
-      const { token, expiresAt } = await createSession(user.id);
-      reply.setCookie(SESSION_COOKIE_NAME, token, {
-        httpOnly: true,
-        secure: true,
-        sameSite: "lax",
-        expires: expiresAt,
-        path: "/",
-      });
-
-      reply.redirect(`${PUBLIC_APP_URL}/account`);
-    } finally {
-      reply.clearCookie(OAUTH_STATE_COOKIE_NAME, { path: "/" });
+    if (!raw) {
+      request.log.error("Google OAuth callback: missing oauth state cookie");
+      reply.redirect(SIGN_IN_FAILED_REDIRECT);
+      return;
     }
+    const [expectedState, codeVerifier] = raw.split(".");
+
+    const client = await getGoogleClient();
+    const params = client.callbackParams(request.raw);
+
+    if (params.state !== expectedState) {
+      request.log.error("Google OAuth callback: state mismatch");
+      reply.redirect(SIGN_IN_FAILED_REDIRECT);
+      return;
+    }
+
+    let claims: { sub: string; email?: string; name?: string };
+    try {
+      const tokenSet = await client.callback(GOOGLE_CALLBACK_URL, params, {
+        state: expectedState,
+        code_verifier: codeVerifier,
+      });
+      claims = tokenSet.claims();
+    } catch (err) {
+      request.log.error({ err }, "Google OAuth callback failed");
+      reply.redirect(SIGN_IN_FAILED_REDIRECT);
+      return;
+    }
+
+    const [existing] = await db
+      .select()
+      .from(users)
+      .where(and(eq(users.provider, "google"), eq(users.providerId, claims.sub)))
+      .limit(1);
+
+    const user =
+      existing ??
+      (
+        await db
+          .insert(users)
+          .values({
+            provider: "google",
+            providerId: claims.sub,
+            email: claims.email ?? "",
+            name: claims.name ?? "",
+          })
+          .returning()
+      )[0];
+
+    const { token, expiresAt } = await createSession(user.id);
+    reply.setCookie(SESSION_COOKIE_NAME, token, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "lax",
+      expires: expiresAt,
+      path: "/",
+    });
+
+    reply.redirect(`${PUBLIC_APP_URL}/account`);
   });
 }

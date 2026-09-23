@@ -1,8 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vitest";
 import { buildServer } from "../src/server";
+import { OAUTH_STATE_COOKIE_NAME } from "../src/auth/oauthState";
 import { db, pool } from "engine/db/client";
 import { users, sessions } from "engine/db/schema";
 import { eq } from "drizzle-orm";
+
+function getSetCookieHeader(
+  response: { headers: { "set-cookie"?: string | string[] } },
+  cookieName: string,
+): string | undefined {
+  const cookies = Array.isArray(response.headers["set-cookie"]) ? response.headers["set-cookie"] : [response.headers["set-cookie"]];
+  return cookies.find((c) => c?.startsWith(`${cookieName}=`));
+}
 
 vi.mock("../src/stripeClient", () => ({
   stripe: {},
@@ -73,6 +82,11 @@ describe("GET /auth/google/callback", () => {
     expect(response.statusCode).toBe(302);
     expect(response.headers.location).toBe(`${process.env.PUBLIC_APP_URL}/?error=sign_in_failed`);
     expect(callback).not.toHaveBeenCalled();
+    // Cleared here too (not just on the happier paths below) — the state
+    // cookie is single-use regardless of outcome, and a request reaching
+    // this branch has already been read for its raw value by the time the
+    // clear happens.
+    expect(getSetCookieHeader(response, OAUTH_STATE_COOKIE_NAME)).toMatch(/Expires=Thu, 01 Jan 1970/);
   });
 
   // The mocked `callbackParams` above always returns a fixed
@@ -101,6 +115,13 @@ describe("GET /auth/google/callback", () => {
     // The real security property: state mismatch must stop the flow before
     // any token exchange is attempted, not just before a session is issued.
     expect(callback).not.toHaveBeenCalled();
+    // The single-use state cookie must actually be cleared on this error
+    // path, not just left to expire on its own 600s maxAge. A prior version
+    // of the handler cleared it in a try/finally wrapping the whole body,
+    // which silently did nothing on every path (reply.redirect() already
+    // flushes the response headers before a `finally` block runs) — this
+    // assertion is what would have caught that regression.
+    expect(getSetCookieHeader(response, OAUTH_STATE_COOKIE_NAME)).toMatch(/Expires=Thu, 01 Jan 1970/);
   });
 
   it("creates a new user, a session, sets the session cookie, and redirects to the app", async () => {
@@ -132,5 +153,10 @@ describe("GET /auth/google/callback", () => {
     const [user] = await db.select().from(users).where(eq(users.provider, "google"));
     expect(user.email).toBe("a@example.com");
     expect(user.providerId).toBe("google-sub-1");
+
+    // The state cookie must be cleared on the success path too, not just on
+    // errors — it's single-use, and a stale one lingering for its full
+    // 600s maxAge after a successful sign-in serves no purpose.
+    expect(getSetCookieHeader(response, OAUTH_STATE_COOKIE_NAME)).toMatch(/Expires=Thu, 01 Jan 1970/);
   });
 });
