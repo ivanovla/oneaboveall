@@ -6,6 +6,44 @@ import { db } from "engine/db/client";
 import { users } from "engine/db/schema";
 import { and, eq } from "drizzle-orm";
 
+// Validated at module load, the same way stripeClient.ts validates
+// STRIPE_SECRET_KEY/STRIPE_WEBHOOK_SECRET and server.ts validates
+// CORS_ORIGIN: fail the process at boot on a misconfigured deploy rather
+// than on the first real sign-in attempt. Without this, a missing
+// PUBLIC_APP_URL in particular would silently produce
+// `reply.redirect("undefined/account")` on an otherwise-successful sign-in,
+// with no error surfaced anywhere.
+//
+// Returns the env var narrowed to `string`, not `string | undefined` — a
+// plain `if (!process.env.X) throw ...` guard next to a separately-declared
+// `const` doesn't narrow that const's type inside functions defined later
+// in this module (TypeScript's control-flow analysis doesn't cross function
+// boundaries), which is what pushed the original code toward `!`
+// non-null-assertions at every call site instead.
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`${name} is required.`);
+  }
+  return value;
+}
+
+const GOOGLE_CLIENT_ID = requireEnv("GOOGLE_CLIENT_ID");
+const GOOGLE_CLIENT_SECRET = requireEnv("GOOGLE_CLIENT_SECRET");
+const API_PUBLIC_URL = requireEnv("API_PUBLIC_URL");
+const PUBLIC_APP_URL = requireEnv("PUBLIC_APP_URL");
+
+const GOOGLE_CALLBACK_URL = `${API_PUBLIC_URL}/auth/google/callback`;
+
+// Reached only via a top-level browser navigation from Google's consent
+// screen — a user who lands here (state cookie expired after too long on
+// Google's screen, a tampered/replayed callback, or a genuine provider
+// error) has no way back to the app from a bare JSON error response at the
+// API's own origin. Redirecting keeps them inside the app; there's no
+// dedicated error page yet, so this lands on the app root with a query
+// flag it can choose to surface later.
+const SIGN_IN_FAILED_REDIRECT = `${PUBLIC_APP_URL}/?error=sign_in_failed`;
+
 // Issuer.discover() fetches Google's .well-known/openid-configuration over
 // the network — this config doesn't change at runtime, so caching it at
 // module scope avoids an extra network round-trip on every single sign-in
@@ -19,9 +57,9 @@ async function getGoogleClient() {
     googleIssuer = await Issuer.discover("https://accounts.google.com");
   }
   return new googleIssuer.Client({
-    client_id: process.env.GOOGLE_CLIENT_ID!,
-    client_secret: process.env.GOOGLE_CLIENT_SECRET!,
-    redirect_uris: [`${process.env.API_PUBLIC_URL}/auth/google/callback`],
+    client_id: GOOGLE_CLIENT_ID,
+    client_secret: GOOGLE_CLIENT_SECRET,
+    redirect_uris: [GOOGLE_CALLBACK_URL],
     response_types: ["code"],
   });
 }
@@ -56,65 +94,81 @@ export function registerGoogleAuthRoutes(app: FastifyInstance): void {
   });
 
   app.get("/auth/google/callback", async (request, reply) => {
-    const raw = request.cookies[OAUTH_STATE_COOKIE_NAME];
-    if (!raw) {
-      reply.code(400);
-      return { error: "missing oauth state cookie" };
-    }
-    const [expectedState, codeVerifier] = raw.split(".");
-
-    const client = await getGoogleClient();
-    const params = client.callbackParams(request.raw);
-
-    if (params.state !== expectedState) {
-      reply.code(400);
-      return { error: "state mismatch" };
-    }
-
-    let claims: { sub: string; email?: string; name?: string };
+    // This endpoint is only ever reached via a top-level browser navigation
+    // from Google's consent screen, so every failure branch below redirects
+    // back into the app instead of dead-ending the user on a bare JSON
+    // response at the API's own origin (e.g. taking more than the state
+    // cookie's 600s maxAge on Google's consent screen is a real,
+    // non-adversarial way to hit the first branch). The real cause is still
+    // logged server-side via request.log.error for debugging.
+    //
+    // The whole handler runs inside a try/finally so the state cookie is
+    // cleared on every exit path, not just the success path — it's single
+    // use regardless of outcome, so there's no reason to leave a stale one
+    // sitting in the browser after a failed attempt.
     try {
-      const tokenSet = await client.callback(
-        `${process.env.API_PUBLIC_URL}/auth/google/callback`,
-        params,
-        { state: expectedState, code_verifier: codeVerifier },
-      );
-      claims = tokenSet.claims();
-    } catch (err) {
-      request.log.error({ err }, "Google OAuth callback failed");
-      reply.code(400);
-      return { error: "sign-in failed" };
+      const raw = request.cookies[OAUTH_STATE_COOKIE_NAME];
+      if (!raw) {
+        request.log.error("Google OAuth callback: missing oauth state cookie");
+        reply.redirect(SIGN_IN_FAILED_REDIRECT);
+        return;
+      }
+      const [expectedState, codeVerifier] = raw.split(".");
+
+      const client = await getGoogleClient();
+      const params = client.callbackParams(request.raw);
+
+      if (params.state !== expectedState) {
+        request.log.error("Google OAuth callback: state mismatch");
+        reply.redirect(SIGN_IN_FAILED_REDIRECT);
+        return;
+      }
+
+      let claims: { sub: string; email?: string; name?: string };
+      try {
+        const tokenSet = await client.callback(GOOGLE_CALLBACK_URL, params, {
+          state: expectedState,
+          code_verifier: codeVerifier,
+        });
+        claims = tokenSet.claims();
+      } catch (err) {
+        request.log.error({ err }, "Google OAuth callback failed");
+        reply.redirect(SIGN_IN_FAILED_REDIRECT);
+        return;
+      }
+
+      const [existing] = await db
+        .select()
+        .from(users)
+        .where(and(eq(users.provider, "google"), eq(users.providerId, claims.sub)))
+        .limit(1);
+
+      const user =
+        existing ??
+        (
+          await db
+            .insert(users)
+            .values({
+              provider: "google",
+              providerId: claims.sub,
+              email: claims.email ?? "",
+              name: claims.name ?? "",
+            })
+            .returning()
+        )[0];
+
+      const { token, expiresAt } = await createSession(user.id);
+      reply.setCookie(SESSION_COOKIE_NAME, token, {
+        httpOnly: true,
+        secure: true,
+        sameSite: "lax",
+        expires: expiresAt,
+        path: "/",
+      });
+
+      reply.redirect(`${PUBLIC_APP_URL}/account`);
+    } finally {
+      reply.clearCookie(OAUTH_STATE_COOKIE_NAME, { path: "/" });
     }
-
-    const [existing] = await db
-      .select()
-      .from(users)
-      .where(and(eq(users.provider, "google"), eq(users.providerId, claims.sub)))
-      .limit(1);
-
-    const user =
-      existing ??
-      (
-        await db
-          .insert(users)
-          .values({
-            provider: "google",
-            providerId: claims.sub,
-            email: claims.email ?? "",
-            name: claims.name ?? "",
-          })
-          .returning()
-      )[0];
-
-    const { token, expiresAt } = await createSession(user.id);
-    reply.clearCookie(OAUTH_STATE_COOKIE_NAME, { path: "/" });
-    reply.setCookie(SESSION_COOKIE_NAME, token, {
-      httpOnly: true,
-      secure: true,
-      sameSite: "lax",
-      expires: expiresAt,
-      path: "/",
-    });
-
-    reply.redirect(`${process.env.PUBLIC_APP_URL}/account`);
   });
 }

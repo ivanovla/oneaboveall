@@ -1,5 +1,8 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vitest";
 import { buildServer } from "../src/server";
+import { db, pool } from "engine/db/client";
+import { users, sessions } from "engine/db/schema";
+import { eq } from "drizzle-orm";
 
 vi.mock("../src/stripeClient", () => ({
   stripe: {},
@@ -29,9 +32,24 @@ vi.mock("openid-client", () => ({
   },
 }));
 
-vi.mock("engine/db/schema", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("engine/db/schema")>();
-  return actual;
+beforeEach(() => {
+  authorizationUrl.mockClear();
+  callback.mockClear();
+});
+
+// This test suite's own DB-backed test creates a `users` row (and, via
+// createSession, a `sessions` row referencing it) directly against the real
+// test database — unconditional cleanup here (rather than inline at the end
+// of that one test) means a failed assertion mid-test still leaves the DB
+// clean for the next run, matching the pattern already used in
+// tests/auth/session.test.ts.
+afterEach(async () => {
+  await db.delete(sessions);
+  await db.delete(users);
+});
+
+afterAll(async () => {
+  await pool.end();
 });
 
 describe("GET /auth/google", () => {
@@ -48,10 +66,41 @@ describe("GET /auth/google", () => {
 });
 
 describe("GET /auth/google/callback", () => {
-  it("rejects a missing state cookie with 400", async () => {
+  it("redirects to the app with an error when the state cookie is missing, without exchanging any code", async () => {
     const app = buildServer();
     const response = await app.inject({ method: "GET", url: "/auth/google/callback?code=x&state=y" });
-    expect(response.statusCode).toBe(400);
+
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe(`${process.env.PUBLIC_APP_URL}/?error=sign_in_failed`);
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  // The mocked `callbackParams` above always returns a fixed
+  // `{ code: "mock-code", state: "mock-state" }` regardless of the actual
+  // request — so this test can't exercise a mismatch by varying the request
+  // URL's `state` query param. Instead it injects a state cookie whose
+  // packed state ("wrong-state") differs from what callbackParams will
+  // report ("mock-state"), which is exactly the case the state check exists
+  // to catch: a cookie that doesn't match the state Google is echoing back.
+  //
+  // This is the single most security-critical branch in the whole route —
+  // without this test, deleting the `if (params.state !== expectedState)`
+  // guard from authGoogle.ts leaves every other test in this file green,
+  // since none of them otherwise distinguish a checked state from an
+  // unchecked one.
+  it("rejects a mismatched state with a redirect and never exchanges the code", async () => {
+    const app = buildServer();
+    const response = await app.inject({
+      method: "GET",
+      url: "/auth/google/callback?code=mock-code&state=mock-state",
+      headers: { cookie: "oneabobeall_oauth_state=wrong-state.mock-verifier" },
+    });
+
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe(`${process.env.PUBLIC_APP_URL}/?error=sign_in_failed`);
+    // The real security property: state mismatch must stop the flow before
+    // any token exchange is attempted, not just before a session is issued.
+    expect(callback).not.toHaveBeenCalled();
   });
 
   it("creates a new user, a session, sets the session cookie, and redirects to the app", async () => {
@@ -71,17 +120,17 @@ describe("GET /auth/google/callback", () => {
     const cookies = Array.isArray(response.headers["set-cookie"]) ? response.headers["set-cookie"] : [response.headers["set-cookie"]];
     expect(cookies.some((c) => c?.includes("oneabobeall_session="))).toBe(true);
 
-    const { db, pool } = await import("engine/db/client");
-    const { users, sessions } = await import("engine/db/schema");
-    const { eq } = await import("drizzle-orm");
+    // Locks in that the PKCE code_verifier generated at /auth/google was
+    // actually threaded through to the token exchange, not just generated
+    // and discarded — this is a real assertion on the exchange call's
+    // arguments, not just code inspection.
+    expect(callback).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
+      state: "mock-state",
+      code_verifier: "mock-verifier",
+    });
+
     const [user] = await db.select().from(users).where(eq(users.provider, "google"));
     expect(user.email).toBe("a@example.com");
     expect(user.providerId).toBe("google-sub-1");
-    // The session row (created by the callback) references this user via a
-    // foreign key, so it must be deleted first or the users delete below
-    // fails the FK constraint.
-    await db.delete(sessions).where(eq(sessions.userId, user.id));
-    await db.delete(users).where(eq(users.id, user.id));
-    await pool.end();
   });
 });

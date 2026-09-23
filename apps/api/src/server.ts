@@ -20,7 +20,34 @@ declare module "fastify" {
 }
 
 export function buildServer(): FastifyInstance {
-  const app = Fastify({ logger: true });
+  const app = Fastify({
+    logger: {
+      // Fastify's default request serializer logs the full request URL,
+      // including its query string. Several routes put credential-shaped
+      // values in the query string — most notably the Google OAuth
+      // authorization code on GET /auth/google/callback?code=...&state=...,
+      // a real (if short-lived, single-use) secret — so logging it verbatim
+      // at info level on every request would put it in plaintext log
+      // storage. Stripping the query string before logging is a reasonable
+      // default for every route, not just this one.
+      // Mirrors Fastify's own default req serializer (fastify/lib/logger.js)
+      // field-for-field, only replacing `url` with its query-string-stripped
+      // form.
+      serializers: {
+        req(request) {
+          const acceptVersion = request.headers?.["accept-version"];
+          return {
+            method: request.method,
+            url: request.url.split("?")[0],
+            version: Array.isArray(acceptVersion) ? acceptVersion[0] : acceptVersion,
+            hostname: request.hostname,
+            remoteAddress: request.ip,
+            remotePort: request.socket?.remotePort,
+          };
+        },
+      },
+    },
+  });
 
   const corsOrigin = process.env.CORS_ORIGIN;
   if (!corsOrigin) {
