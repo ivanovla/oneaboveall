@@ -1,5 +1,4 @@
 import { describe, it, expect, afterEach, afterAll } from "vitest";
-import { eq } from "drizzle-orm";
 import { db, pool } from "engine/db/client";
 import { users, sessions } from "engine/db/schema";
 import { createSession, getUserBySessionToken, deleteSession } from "../../src/auth/session";
