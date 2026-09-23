@@ -518,25 +518,6 @@ export default function AuctionFlow({
               {formatMoney(depositCents)}
             </div>
           </div>
-          <div style={{ marginTop: 20 }}>
-            <div style={fieldLabelStyle}>Deposit payment method</div>
-            <div
-              style={{
-                marginTop: 9,
-                padding: 14,
-                fontSize: 12,
-                border: "1px solid var(--gold)",
-                background: "var(--gold)",
-                color: "var(--btn-fg)",
-                textAlign: "center",
-              }}
-            >
-              Stripe
-            </div>
-            <div style={{ marginTop: 9, fontSize: 11, color: "var(--fg-faint)" }}>
-              Visa / Mastercard, charged in US dollars.
-            </div>
-          </div>
           <button onClick={() => setScreen("lead")} style={primaryButtonStyle}>
             Place deposit
           </button>
