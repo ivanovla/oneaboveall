@@ -1,0 +1,11 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+import AccountShell from "../components/AccountShell";
+
+const apiBaseUrl = import.meta.env.API_BASE_URL ?? "http://127.0.0.1:3001";
+---
+<BaseLayout title="oneabobeall — Account">
+  <AccountShell client:load apiBaseUrl={apiBaseUrl}>
+    <p>Welcome to your account.</p>
+  </AccountShell>
+</BaseLayout>
