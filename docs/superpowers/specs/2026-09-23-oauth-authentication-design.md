@@ -81,6 +81,16 @@ double-submitted OAuth callback safe.
 `sessions.token` — never any user data client-side. `GET /auth/me` and any future
 authenticated route look the token up against `sessions`, joined to `users`.
 
+**CORS:** `apps/web` (`astro.config.mjs` is `output: "static"` — confirmed in this branch,
+no SSR adapter exists) and `apps/api` are same-origin in production (Traefik path-routes
+`oneabobeall.org/api/*` to `apps/api`, per the deployment design), but are two different
+origins in local dev (`127.0.0.1:4322` vs `127.0.0.1:3001`). The account pages call
+`fetch(..., { credentials: "include" })` from the browser (see Section B), which needs
+`apps/api` to send `Access-Control-Allow-Origin`/`Access-Control-Allow-Credentials` for the
+dev origin. Add `@fastify/cors`, configured from an env var (`CORS_ORIGIN`, defaulting to the
+local dev URL) — restricted to that one known origin, not a wildcard, since credentials are
+involved.
+
 **Apple's first-login-only profile data:** Apple includes `email` and `name` in the callback
 payload only on the user's very first authorization for this app; every subsequent sign-in
 omits them (returning only the stable `sub` identifier). The callback handler must persist
@@ -130,10 +140,14 @@ returning user's callback updates nothing but confirms/reuses the existing row v
 ## Section B: Personal Account Dashboard Shell
 
 A new Astro route, `apps/web/src/pages/account.astro` (or a directory `account/index.astro` if
-sub-routes are needed — `account/auction.astro` for Section C). Server-rendered per request
-(not static — it must check the session cookie before rendering anything), redirecting to the
-sign-in entry point if `GET /auth/me` (called server-side, during the page's own render) returns
-401.
+sub-routes are needed — `account/auction.astro` for Section C). **Statically built**, exactly
+like every other page in `apps/web` (`astro.config.mjs` is `output: "static"` today, with no
+SSR adapter — introducing one just for these two pages would mean standing up a Node process to
+serve `apps/web` at all, a real new piece of infrastructure this plan doesn't need). The session
+check happens client-side instead: a small React island, hydrated `client:load` (not `idle` —
+this one gates page content, so it should resolve as early as reasonably possible), calls
+`GET /auth/me` on mount and redirects to the sign-in entry point on a 401. The static shell
+renders a minimal loading state until that check resolves.
 
 Layout: reuses `apps/web/src/styles/tokens.css` as-is — `--void` background, `--gold` accent,
 Cormorant Garamond for numbers/headings, Manrope for body text, the same panel/line treatment
@@ -144,10 +158,10 @@ public scene, just in a normal page layout instead of a full-bleed photo with ov
 
 ## Section C: Auction / Bidding Page
 
-`apps/web/src/pages/account/auction.astro` (or equivalent), the dashboard's main content.
-Fetches initial state server-side on render (current round info, whether this signed-in user
-has already joined), then a client-side island (a trimmed-down descendant of the existing
-`AuctionFlow.tsx` patterns, not a rewrite from scratch) takes over for the live parts:
+`apps/web/src/pages/account/auction.astro` (or equivalent) — also statically built, same
+reasoning as Section B. A client-side island (a trimmed-down descendant of the existing
+`AuctionFlow.tsx` patterns, not a rewrite from scratch) fetches everything after mount — current
+round info, whether this signed-in user has already joined — and handles the live parts:
 
 - Polls `GET /current-round` every 5–10s while the tab is visible (paused via the
   `document.visibilityState`/`visibilitychange` check — see Performance & Scale) to keep price,
@@ -187,12 +201,13 @@ changes a few defaults from what a "just make it work" version would ship with:
   the interval on `hidden`, resume (and immediately re-fetch once) on `visible`. A large fraction
   of "many concurrent users" in practice means many open-but-backgrounded tabs; this alone cuts
   a meaningful share of the polling load for free.
-- **Dashboard/auction pages stay a thin shell, not a full SSR re-render per poll.** Only the
-  initial page load is server-rendered (for the session check and first paint); every
-  subsequent update is a plain client-side fetch against `apps/api`'s JSON routes, not a
-  re-render of the Astro page. This keeps the marginal cost of "one more active user" limited to
-  small JSON responses and the existing (already load-tested-in-design)
-  `placeBidAtomic`/`joinRound` DB paths, not page-rendering work.
+- **Dashboard/auction pages are static HTML, not re-rendered per poll or per visit.** Since
+  `apps/web` stays `output: "static"` (see Section B), the page itself is a build-time artifact
+  servable straight from a CDN/static host — there is no per-request page-render cost at all,
+  server or otherwise. Every poll and every action is a plain client-side JSON fetch against
+  `apps/api`. This keeps the marginal cost of "one more active user" limited to small JSON
+  responses and the existing (already load-tested-in-design) `placeBidAtomic`/`joinRound` DB
+  paths — `apps/web` itself does not get busier as concurrent users grow.
 - **No change needed to the engine's existing concurrency handling.** `placeBidAtomic`'s
   SERIALIZABLE-with-retry pattern is already the documented, deliberate answer to many
   simultaneous bidders contending for the same round's leader slot — this plan adds callers, not
