@@ -3,16 +3,20 @@ import type Stripe from "stripe";
 import { getRoundParticipant, getCurrentReign, getLatestRound, isBanned } from "engine/db/repository";
 import { isBiddingOpen } from "engine/engine/joinRound";
 import { calculateDeposit } from "engine/domain/deposit";
+import { requireSession } from "../auth/requireSession";
 
 export function registerJoinRoundRoute(app: FastifyInstance, stripe: Stripe, currency: string): void {
-  app.post<{ Params: { id: string }; Body: { bidderId?: string } }>("/rounds/:id/join", async (request, reply) => {
+  app.post<{ Params: { id: string } }>("/rounds/:id/join", async (request, reply) => {
+    // The bidder is whoever holds the session cookie — never a value from the
+    // request body. This route creates a PaymentIntent and saves a card for
+    // off-session reuse; trusting a caller-supplied bidderId here, as this
+    // route once did, let anyone put anyone else's saved card on the hook.
+    // There is deliberately no body field for it any more, so there is
+    // nothing to fall back to and nothing to forget to check.
+    const user = await requireSession(request, reply);
+    if (!user) return;
+    const bidderId = user.id;
     const { id: roundId } = request.params;
-    const { bidderId } = request.body ?? {};
-
-    if (!bidderId || typeof bidderId !== "string") {
-      reply.code(400);
-      return { error: "bidderId is required" };
-    }
 
     const reign = await getCurrentReign();
     if (!reign) {

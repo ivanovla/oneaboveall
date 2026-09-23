@@ -16,9 +16,9 @@ vi.mock("engine/db/repository", () => ({
   getRoundParticipant: vi.fn(async () => null),
   getCurrentReign: vi.fn(async () => ({ id: "reign-1", occupantId: "champ", priceCents: 10_000, startedAt: new Date(), endedAt: null })),
   // By default, the current round is "round-1" — matching the `:id` the
-  // happy-path/400/404(no reign)/409 tests below post to, so those tests
-  // still reach the code paths they're testing now that the route verifies
-  // `:id` against the actual current round.
+  // happy-path/404(no reign)/409 tests below post to, so those tests still
+  // reach the code paths they're testing now that the route verifies `:id`
+  // against the actual current round.
   getLatestRound: vi.fn(async () => ({ id: "round-1", reignId: "reign-1", startsAt: new Date(), phase: "bidding" })),
   isBanned: vi.fn(async () => false),
 }));
@@ -27,6 +27,16 @@ vi.mock("../src/stripeClient", () => ({
   stripe: { paymentIntents: { create: createPaymentIntent }, customers: { create: createCustomer } },
   STRIPE_CURRENCY: "usd",
   STRIPE_WEBHOOK_SECRET: "whsec_test",
+}));
+
+// bidderId is now derived from the session, not the request body — every
+// test in this file signs in as "challenger" by default; the tests that need a
+// different bidder (or no session at all) override this per-call.
+// The real, DB-backed cookie→user lookup is covered by
+// tests/auth/requireSession.test.ts, and the unmocked 401 wiring for this
+// route by tests/routeAuthGuards.test.ts.
+vi.mock("../src/auth/requireSession", () => ({
+  requireSession: vi.fn(async () => ({ id: "challenger", email: "c@example.com", name: "C" })),
 }));
 
 describe("POST /rounds/:id/join", () => {
@@ -41,11 +51,7 @@ describe("POST /rounds/:id/join", () => {
 
   it("creates a deposit PaymentIntent and returns its client secret", async () => {
     const app = buildServer();
-    const response = await app.inject({
-      method: "POST",
-      url: "/rounds/round-1/join",
-      payload: { bidderId: "challenger" },
-    });
+    const response = await app.inject({ method: "POST", url: "/rounds/round-1/join" });
 
     expect(response.statusCode).toBe(200);
     const body = response.json();
@@ -65,10 +71,51 @@ describe("POST /rounds/:id/join", () => {
     );
   });
 
-  it("rejects a missing bidderId with 400", async () => {
+  it("returns 401 when not signed in", async () => {
+    const { requireSession } = await import("../src/auth/requireSession");
+    vi.mocked(requireSession).mockImplementationOnce(async (_req, reply) => {
+      reply.code(401);
+      reply.send({ error: "not signed in" });
+      return null;
+    });
+
     const app = buildServer();
-    const response = await app.inject({ method: "POST", url: "/rounds/round-1/join", payload: {} });
-    expect(response.statusCode).toBe(400);
+    const response = await app.inject({ method: "POST", url: "/rounds/round-1/join" });
+    expect(response.statusCode).toBe(401);
+    expect(createPaymentIntent).not.toHaveBeenCalled();
+    expect(createCustomer).not.toHaveBeenCalled();
+  });
+
+  // This is the whole point of the task: before it, a bidderId in the body was
+  // taken at face value, so anyone could make anyone else's saved card the one
+  // on the hook for this round's deposit. A body bidderId must now be inert.
+  it("ignores a bidderId smuggled in the request body and charges the session user", async () => {
+    const app = buildServer();
+    const response = await app.inject({
+      method: "POST",
+      url: "/rounds/round-1/join",
+      payload: { bidderId: "victim" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(createCustomer).toHaveBeenCalledWith({ metadata: { bidderId: "challenger" } });
+    expect(createPaymentIntent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: { kind: "deposit", roundId: "round-1", bidderId: "challenger" },
+      }),
+    );
+  });
+
+  it("checks the ban list and the duplicate-join guard against the session user, not the body", async () => {
+    const { isBanned, getRoundParticipant } = await import("engine/db/repository");
+    vi.mocked(isBanned).mockClear();
+    vi.mocked(getRoundParticipant).mockClear();
+
+    const app = buildServer();
+    await app.inject({ method: "POST", url: "/rounds/round-1/join", payload: { bidderId: "victim" } });
+
+    expect(isBanned).toHaveBeenCalledWith("challenger", expect.any(Date));
+    expect(getRoundParticipant).toHaveBeenCalledWith("round-1", "challenger");
   });
 
   it("rejects with 404 when there's no active reign", async () => {
@@ -76,18 +123,18 @@ describe("POST /rounds/:id/join", () => {
     vi.mocked(getCurrentReign).mockResolvedValueOnce(null);
 
     const app = buildServer();
-    const response = await app.inject({ method: "POST", url: "/rounds/round-1/join", payload: { bidderId: "challenger" } });
+    const response = await app.inject({ method: "POST", url: "/rounds/round-1/join" });
     expect(response.statusCode).toBe(404);
   });
 
   it("rejects with 409 when this bidder already joined this round", async () => {
     const { getRoundParticipant } = await import("engine/db/repository");
     vi.mocked(getRoundParticipant).mockResolvedValueOnce({
-      id: "p1", roundId: "round-1", bidderId: "challenger", depositCents: 1_000, depositRef: "pi_0", paymentMethodRef: "pm_0", depositStatus: "held", joinedAt: new Date(),
+      id: "p1", roundId: "round-1", bidderId: "challenger", depositCents: 1_000, depositRef: "pi_0", paymentMethodRef: "pm_0", customerRef: "cus_0", depositStatus: "held", joinedAt: new Date(),
     } as any);
 
     const app = buildServer();
-    const response = await app.inject({ method: "POST", url: "/rounds/round-1/join", payload: { bidderId: "challenger" } });
+    const response = await app.inject({ method: "POST", url: "/rounds/round-1/join" });
     expect(response.statusCode).toBe(409);
   });
 
@@ -96,7 +143,7 @@ describe("POST /rounds/:id/join", () => {
     vi.mocked(getLatestRound).mockResolvedValueOnce(null);
 
     const app = buildServer();
-    const response = await app.inject({ method: "POST", url: "/rounds/nonexistent-round/join", payload: { bidderId: "challenger" } });
+    const response = await app.inject({ method: "POST", url: "/rounds/nonexistent-round/join" });
     expect(response.statusCode).toBe(404);
     expect(createPaymentIntent).not.toHaveBeenCalled();
   });
@@ -109,7 +156,7 @@ describe("POST /rounds/:id/join", () => {
     vi.mocked(getLatestRound).mockResolvedValueOnce({ id: "round-2", reignId: "reign-1", startsAt: new Date(), phase: "bidding" } as any);
 
     const app = buildServer();
-    const response = await app.inject({ method: "POST", url: "/rounds/round-1/join", payload: { bidderId: "challenger" } });
+    const response = await app.inject({ method: "POST", url: "/rounds/round-1/join" });
     expect(response.statusCode).toBe(404);
     expect(createPaymentIntent).not.toHaveBeenCalled();
   });
@@ -122,7 +169,7 @@ describe("POST /rounds/:id/join", () => {
     vi.mocked(getLatestRound).mockResolvedValueOnce({ id: "round-1", reignId: "reign-1", startsAt: new Date(), phase: "bidding" } as any);
 
     const app = buildServer();
-    const response = await app.inject({ method: "POST", url: "/rounds/some-other-id/join", payload: { bidderId: "challenger" } });
+    const response = await app.inject({ method: "POST", url: "/rounds/some-other-id/join" });
     expect(response.statusCode).toBe(404);
     expect(createPaymentIntent).not.toHaveBeenCalled();
   });
@@ -140,7 +187,7 @@ describe("POST /rounds/:id/join", () => {
     } as any);
 
     const app = buildServer();
-    const response = await app.inject({ method: "POST", url: "/rounds/round-1/join", payload: { bidderId: "challenger" } });
+    const response = await app.inject({ method: "POST", url: "/rounds/round-1/join" });
 
     expect(response.statusCode).toBe(409);
     expect(createPaymentIntent).not.toHaveBeenCalled();
@@ -157,7 +204,7 @@ describe("POST /rounds/:id/join", () => {
     } as any);
 
     const app = buildServer();
-    const response = await app.inject({ method: "POST", url: "/rounds/round-1/join", payload: { bidderId: "challenger" } });
+    const response = await app.inject({ method: "POST", url: "/rounds/round-1/join" });
 
     expect(response.statusCode).toBe(409);
     expect(createPaymentIntent).not.toHaveBeenCalled();
@@ -165,12 +212,14 @@ describe("POST /rounds/:id/join", () => {
 
   it("rejects a banned bidder with 403 and takes no money", async () => {
     const { isBanned } = await import("engine/db/repository");
+    const { requireSession } = await import("../src/auth/requireSession");
     // placeBid would reject every bid this bidder attempts, so the deposit
     // would just sit charged until the round closed and refunded it.
     vi.mocked(isBanned).mockResolvedValueOnce(true);
+    vi.mocked(requireSession).mockResolvedValueOnce({ id: "banned-guy", email: "b@example.com", name: "B" });
 
     const app = buildServer();
-    const response = await app.inject({ method: "POST", url: "/rounds/round-1/join", payload: { bidderId: "banned-guy" } });
+    const response = await app.inject({ method: "POST", url: "/rounds/round-1/join" });
 
     expect(response.statusCode).toBe(403);
     expect(createPaymentIntent).not.toHaveBeenCalled();

@@ -9,6 +9,7 @@ import { registerLeaderboardRoute } from "./routes/leaderboard";
 import { registerCurrentRoundRoute } from "./routes/currentRound";
 import { registerJoinRoundRoute } from "./routes/joinRound";
 import { registerPlaceBidRoute } from "./routes/placeBid";
+import { registerRoundParticipationRoute } from "./routes/roundParticipation";
 import { registerStripeWebhookRoute } from "./routes/stripeWebhook";
 import { registerGoogleAuthRoutes } from "./routes/authGoogle";
 import { registerAppleAuthRoutes } from "./routes/authApple";
@@ -110,6 +111,7 @@ export function buildServer(): FastifyInstance {
   registerCurrentRoundRoute(app);
   registerJoinRoundRoute(app, stripe, STRIPE_CURRENCY);
   registerPlaceBidRoute(app);
+  registerRoundParticipationRoute(app);
   registerStripeWebhookRoute(app, stripe, STRIPE_WEBHOOK_SECRET, stripeProvider);
   registerGoogleAuthRoutes(app);
   registerAppleAuthRoutes(app);
