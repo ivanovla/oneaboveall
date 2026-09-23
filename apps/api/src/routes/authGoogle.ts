@@ -66,31 +66,43 @@ async function getGoogleClient() {
 
 export function registerGoogleAuthRoutes(app: FastifyInstance): void {
   app.get("/auth/google", async (request, reply) => {
-    const client = await getGoogleClient();
-    const state = generateState();
-    const codeVerifier = generateCodeVerifier();
-    const codeChallenge = generateCodeChallenge(codeVerifier);
+    // The entry point needs the same redirect-on-failure treatment as the
+    // callback below, for the same reason: it is reached by a top-level
+    // browser navigation (the user clicking "Sign in with Google"), so a raw
+    // 500 strands them on a bare JSON error at the API's own origin with no
+    // way back. getGoogleClient() does a live Issuer.discover() network fetch
+    // on the first call after boot, and a transient DNS/network failure there
+    // is an entirely ordinary thing to hit.
+    try {
+      const client = await getGoogleClient();
+      const state = generateState();
+      const codeVerifier = generateCodeVerifier();
+      const codeChallenge = generateCodeChallenge(codeVerifier);
 
-    // Packed into one cookie value (state + verifier) since both are needed
-    // back at the callback and no user session exists yet to store them
-    // server-side against. Short-lived and httpOnly — this cookie carries no
-    // user data, just the handshake's own nonces.
-    reply.setCookie(OAUTH_STATE_COOKIE_NAME, `${state}.${codeVerifier}`, {
-      httpOnly: true,
-      secure: true,
-      sameSite: "lax",
-      maxAge: 600,
-      path: "/",
-    });
+      // Packed into one cookie value (state + verifier) since both are needed
+      // back at the callback and no user session exists yet to store them
+      // server-side against. Short-lived and httpOnly — this cookie carries no
+      // user data, just the handshake's own nonces.
+      reply.setCookie(OAUTH_STATE_COOKIE_NAME, `${state}.${codeVerifier}`, {
+        httpOnly: true,
+        secure: true,
+        sameSite: "lax",
+        maxAge: 600,
+        path: "/",
+      });
 
-    const url = client.authorizationUrl({
-      scope: "openid email profile",
-      state,
-      code_challenge: codeChallenge,
-      code_challenge_method: "S256",
-    });
+      const url = client.authorizationUrl({
+        scope: "openid email profile",
+        state,
+        code_challenge: codeChallenge,
+        code_challenge_method: "S256",
+      });
 
-    reply.redirect(url);
+      reply.redirect(url);
+    } catch (err) {
+      request.log.error({ err }, "Google OAuth authorization request failed");
+      reply.redirect(SIGN_IN_FAILED_REDIRECT);
+    }
   });
 
   app.get("/auth/google/callback", async (request, reply) => {
@@ -122,8 +134,19 @@ export function registerGoogleAuthRoutes(app: FastifyInstance): void {
     }
     const [expectedState, codeVerifier] = raw.split(".");
 
-    const client = await getGoogleClient();
-    const params = client.callbackParams(request.raw);
+    // Guarded for the same reason as GET /auth/google above:
+    // getGoogleClient() may do a live Issuer.discover() fetch on the first
+    // call after boot, which can fail for reasons unrelated to this request.
+    let client: Awaited<ReturnType<typeof getGoogleClient>>;
+    let params: ReturnType<typeof client.callbackParams>;
+    try {
+      client = await getGoogleClient();
+      params = client.callbackParams(request.raw);
+    } catch (err) {
+      request.log.error({ err }, "Google OAuth callback: client setup failed");
+      reply.redirect(SIGN_IN_FAILED_REDIRECT);
+      return;
+    }
 
     if (params.state !== expectedState) {
       request.log.error("Google OAuth callback: state mismatch");
@@ -144,35 +167,46 @@ export function registerGoogleAuthRoutes(app: FastifyInstance): void {
       return;
     }
 
-    const [existing] = await db
-      .select()
-      .from(users)
-      .where(and(eq(users.provider, "google"), eq(users.providerId, claims.sub)))
-      .limit(1);
+    // Everything below (the user lookup/insert and session creation) can fail
+    // independently of the token exchange above — a transient DB error, or a
+    // unique-constraint violation from two concurrent first-time callbacks
+    // racing for the same (provider, providerId) — and must still land the
+    // user back in the app rather than a raw 500, same as every other failure
+    // branch in this handler. Mirrors authApple.ts's equivalent block.
+    try {
+      const [existing] = await db
+        .select()
+        .from(users)
+        .where(and(eq(users.provider, "google"), eq(users.providerId, claims.sub)))
+        .limit(1);
 
-    const user =
-      existing ??
-      (
-        await db
-          .insert(users)
-          .values({
-            provider: "google",
-            providerId: claims.sub,
-            email: claims.email ?? "",
-            name: claims.name ?? "",
-          })
-          .returning()
-      )[0];
+      const user =
+        existing ??
+        (
+          await db
+            .insert(users)
+            .values({
+              provider: "google",
+              providerId: claims.sub,
+              email: claims.email ?? "",
+              name: claims.name ?? "",
+            })
+            .returning()
+        )[0];
 
-    const { token, expiresAt } = await createSession(user.id);
-    reply.setCookie(SESSION_COOKIE_NAME, token, {
-      httpOnly: true,
-      secure: true,
-      sameSite: "lax",
-      expires: expiresAt,
-      path: "/",
-    });
+      const { token, expiresAt } = await createSession(user.id);
+      reply.setCookie(SESSION_COOKIE_NAME, token, {
+        httpOnly: true,
+        secure: true,
+        sameSite: "lax",
+        expires: expiresAt,
+        path: "/",
+      });
 
-    reply.redirect(`${PUBLIC_APP_URL}/account`);
+      reply.redirect(`${PUBLIC_APP_URL}/account`);
+    } catch (err) {
+      request.log.error({ err }, "Google OAuth callback: user/session creation failed");
+      reply.redirect(SIGN_IN_FAILED_REDIRECT);
+    }
   });
 }

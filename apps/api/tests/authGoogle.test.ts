@@ -55,6 +55,10 @@ beforeEach(() => {
 afterEach(async () => {
   await db.delete(sessions);
   await db.delete(users);
+  // Undoes the vi.spyOn(db, ...) the DB-failure test below installs. The
+  // module mocks above are plain vi.fn()s, which restoreAllMocks leaves
+  // alone.
+  vi.restoreAllMocks();
 });
 
 afterAll(async () => {
@@ -71,6 +75,41 @@ describe("GET /auth/google", () => {
     expect(response.headers["set-cookie"]).toBeDefined();
     const cookies = Array.isArray(response.headers["set-cookie"]) ? response.headers["set-cookie"] : [response.headers["set-cookie"]];
     expect(cookies.some((c) => c?.includes("oneabobeall_oauth_state="))).toBe(true);
+  });
+
+  // The mirror of authApple.test.ts's "SameSite=None" assertion. The
+  // divergence between the two providers is deliberate and load-bearing:
+  // Google's callback is a top-level cross-site GET, which a Lax cookie IS
+  // sent on, whereas Apple's is a cross-site POST, which it is not. A
+  // refactor that "tidied up" the two routes into one shared cookie config
+  // would break one provider or the other, and without an assertion on each
+  // side nothing would catch it — app.inject bypasses real browser SameSite
+  // enforcement entirely.
+  it("sets the state cookie with SameSite=Lax (correct for Google's GET callback, unlike Apple's None)", async () => {
+    const app = buildServer();
+    const response = await app.inject({ method: "GET", url: "/auth/google" });
+
+    const stateCookie = getSetCookieHeader(response, OAUTH_STATE_COOKIE_NAME);
+    expect(stateCookie).toMatch(/SameSite=Lax/i);
+    expect(stateCookie).not.toMatch(/SameSite=None/i);
+    expect(stateCookie).toMatch(/Secure/i);
+    expect(stateCookie).toMatch(/HttpOnly/i);
+  });
+
+  // The entry point is reached by a top-level browser navigation, same as the
+  // callback, so a failure while building the authorization URL (the cached
+  // Issuer.discover() network fetch, most realistically) has to land the user
+  // back in the app rather than on a raw 500 at the API's own origin.
+  it("redirects to the app when building the authorization request throws, instead of 500ing", async () => {
+    authorizationUrl.mockImplementationOnce(() => {
+      throw new Error("getaddrinfo ENOTFOUND accounts.google.com");
+    });
+
+    const app = buildServer();
+    const response = await app.inject({ method: "GET", url: "/auth/google" });
+
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe(`${process.env.PUBLIC_APP_URL}/?error=sign_in_failed`);
   });
 });
 
@@ -158,5 +197,37 @@ describe("GET /auth/google/callback", () => {
     // errors — it's single-use, and a stale one lingering for its full
     // 600s maxAge after a successful sign-in serves no purpose.
     expect(getSetCookieHeader(response, OAUTH_STATE_COOKIE_NAME)).toMatch(/Expires=Thu, 01 Jan 1970/);
+  });
+
+  // The token exchange has always been wrapped; the user lookup/insert and
+  // createSession that follow it were not, so a transient DB error or a
+  // unique-constraint race between two concurrent first-time callbacks
+  // raw-500'd at the API's own origin instead of redirecting the user back
+  // into the app. Mirrors the equivalent try/catch in authApple.ts.
+  it("redirects to the app when the user/session creation fails, instead of 500ing", async () => {
+    const selectSpy = vi.spyOn(db, "select").mockImplementationOnce(() => {
+      throw new Error("connection terminated unexpectedly");
+    });
+
+    const app = buildServer();
+    const stateResponse = await app.inject({ method: "GET", url: "/auth/google" });
+    const stateCookie = (Array.isArray(stateResponse.headers["set-cookie"]) ? stateResponse.headers["set-cookie"] : [stateResponse.headers["set-cookie"]])
+      .find((c) => c?.includes("oneabobeall_oauth_state="))!;
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/auth/google/callback?code=mock-code&state=mock-state",
+      headers: { cookie: stateCookie.split(";")[0] },
+    });
+
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe(`${process.env.PUBLIC_APP_URL}/?error=sign_in_failed`);
+    // The failure really did happen in the DB block, i.e. after a successful
+    // token exchange — not somewhere earlier that would redirect anyway.
+    expect(callback).toHaveBeenCalled();
+    expect(selectSpy).toHaveBeenCalled();
+    // No session cookie handed out on a failed sign-in.
+    const cookies = Array.isArray(response.headers["set-cookie"]) ? response.headers["set-cookie"] : [response.headers["set-cookie"]];
+    expect(cookies.some((c) => c?.includes("oneabobeall_session="))).toBe(false);
   });
 });

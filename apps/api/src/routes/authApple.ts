@@ -59,46 +59,60 @@ async function getAppleClient(clientSecret: string) {
 
 export function registerAppleAuthRoutes(app: FastifyInstance): void {
   app.get("/auth/apple", async (request, reply) => {
-    const clientSecret = await generateAppleClientSecret();
-    const client = await getAppleClient(clientSecret);
-    const state = generateState();
-    const codeVerifier = generateCodeVerifier();
-    const codeChallenge = generateCodeChallenge(codeVerifier);
+    // The entry point needs the same redirect-on-failure treatment as the
+    // callback below, for the same reason: it is reached by a top-level
+    // browser navigation (the user clicking "Sign in with Apple"), so a raw
+    // 500 strands them on a bare JSON error at the API's own origin with no
+    // way back into the app. There are two very ordinary failures here:
+    // generateAppleClientSecret() readFileSync's APPLE_PRIVATE_KEY_PATH and
+    // throws ENOENT on a missing or misconfigured .p8, and getAppleClient()
+    // does a live Issuer.discover() network fetch on the first call after
+    // boot.
+    try {
+      const clientSecret = await generateAppleClientSecret();
+      const client = await getAppleClient(clientSecret);
+      const state = generateState();
+      const codeVerifier = generateCodeVerifier();
+      const codeChallenge = generateCodeChallenge(codeVerifier);
 
-    // Packed into one cookie value (state + verifier), same as Google's
-    // flow — both are needed back at the callback and no user session
-    // exists yet to store them against server-side.
-    //
-    // sameSite MUST be "none" here, unlike Google's "lax" — Apple's
-    // callback arrives as a cross-site POST (appleid.apple.com ->
-    // API_PUBLIC_URL, via response_mode: "form_post"), and a Lax cookie is
-    // only sent on cross-site top-level *GET* navigations, never on a
-    // cross-site POST. With "lax" here, this cookie would simply never
-    // arrive at POST /auth/apple/callback in production, and every real
-    // sign-in would hit the "missing state cookie" branch. "none" requires
-    // `secure: true` (already set), which the browser enforces.
-    reply.setCookie(OAUTH_STATE_COOKIE_NAME, `${state}.${codeVerifier}`, {
-      httpOnly: true,
-      secure: true,
-      sameSite: "none",
-      maxAge: 600,
-      path: "/",
-    });
+      // Packed into one cookie value (state + verifier), same as Google's
+      // flow — both are needed back at the callback and no user session
+      // exists yet to store them against server-side.
+      //
+      // sameSite MUST be "none" here, unlike Google's "lax" — Apple's
+      // callback arrives as a cross-site POST (appleid.apple.com ->
+      // API_PUBLIC_URL, via response_mode: "form_post"), and a Lax cookie is
+      // only sent on cross-site top-level *GET* navigations, never on a
+      // cross-site POST. With "lax" here, this cookie would simply never
+      // arrive at POST /auth/apple/callback in production, and every real
+      // sign-in would hit the "missing state cookie" branch. "none" requires
+      // `secure: true` (already set), which the browser enforces.
+      reply.setCookie(OAUTH_STATE_COOKIE_NAME, `${state}.${codeVerifier}`, {
+        httpOnly: true,
+        secure: true,
+        sameSite: "none",
+        maxAge: 600,
+        path: "/",
+      });
 
-    const url = client.authorizationUrl({
-      scope: "name email",
-      state,
-      code_challenge: codeChallenge,
-      code_challenge_method: "S256",
-      // Apple requires form_post when requesting the "name"/"email" scopes:
-      // the authorization result (including the one-time "user" JSON blob)
-      // is delivered via a POST to the redirect URI instead of a GET query
-      // string, which is why the callback route below is a POST handler
-      // rather than a GET one like Google's.
-      response_mode: "form_post",
-    });
+      const url = client.authorizationUrl({
+        scope: "name email",
+        state,
+        code_challenge: codeChallenge,
+        code_challenge_method: "S256",
+        // Apple requires form_post when requesting the "name"/"email" scopes:
+        // the authorization result (including the one-time "user" JSON blob)
+        // is delivered via a POST to the redirect URI instead of a GET query
+        // string, which is why the callback route below is a POST handler
+        // rather than a GET one like Google's.
+        response_mode: "form_post",
+      });
 
-    reply.redirect(url);
+      reply.redirect(url);
+    } catch (err) {
+      request.log.error({ err }, "Apple OAuth authorization request failed");
+      reply.redirect(SIGN_IN_FAILED_REDIRECT);
+    }
   });
 
   app.post<{ Body: { code?: string; state?: string; user?: string } }>(
@@ -136,11 +150,15 @@ export function registerAppleAuthRoutes(app: FastifyInstance): void {
         return;
       }
 
-      const clientSecret = await generateAppleClientSecret();
-      const client = await getAppleClient(clientSecret);
-
       let claims: { sub: string; email?: string };
       try {
+        // Inside the try, not before it: generateAppleClientSecret() reads
+        // APPLE_PRIVATE_KEY_PATH off disk and getAppleClient() may do a live
+        // Issuer.discover() fetch, so both can throw for reasons that have
+        // nothing to do with this particular request — and, like every other
+        // failure in this handler, must redirect rather than raw-500.
+        const clientSecret = await generateAppleClientSecret();
+        const client = await getAppleClient(clientSecret);
         const tokenSet = await client.callback(
           APPLE_CALLBACK_URL,
           { code: request.body?.code, state: request.body?.state },

@@ -90,6 +90,24 @@ describe("GET /auth/apple", () => {
     expect(stateCookie).toMatch(/SameSite=None/i);
     expect(stateCookie).toMatch(/Secure/i);
   });
+
+  // The callback carefully redirects on every failure; the entry point did
+  // not. generateAppleClientSecret() readFileSync's APPLE_PRIVATE_KEY_PATH,
+  // so a missing or misconfigured .p8 threw ENOENT straight out of the
+  // handler as a raw 500 at the API's own origin — with the user having just
+  // clicked "Sign in with Apple" and no way back into the app.
+  it("redirects to the app when client-secret generation fails (e.g. a missing .p8), instead of 500ing", async () => {
+    const { generateAppleClientSecret } = await import("../src/auth/appleClientSecret");
+    vi.mocked(generateAppleClientSecret).mockRejectedValueOnce(
+      new Error("ENOENT: no such file or directory, open './apple-private-key.p8'"),
+    );
+
+    const app = buildServer();
+    const response = await app.inject({ method: "GET", url: "/auth/apple" });
+
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe(`${process.env.PUBLIC_APP_URL}/?error=sign_in_failed`);
+  });
 });
 
 describe("POST /auth/apple/callback", () => {
