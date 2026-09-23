@@ -2,7 +2,7 @@
 import { describe, it, expect, afterAll } from "vitest";
 import { eq } from "drizzle-orm";
 import { db, pool } from "../../src/db/client";
-import { reigns, rounds, roundParticipants } from "../../src/db/schema";
+import { reigns, rounds, roundParticipants, users, sessions } from "../../src/db/schema";
 
 describe("schema", () => {
   afterAll(async () => {
@@ -41,5 +41,26 @@ describe("schema", () => {
     await db.delete(roundParticipants).where(eq(roundParticipants.id, inserted.id));
     await db.delete(rounds).where(eq(rounds.id, round.id));
     await db.delete(reigns).where(eq(reigns.id, reign.id));
+  });
+
+  it("can insert a user and a session, and rejects a duplicate (provider, providerId)", async () => {
+    const [user] = await db
+      .insert(users)
+      .values({ provider: "google", providerId: "g-1", email: "a@example.com", name: "A" })
+      .returning();
+    expect(user.id).toBeTruthy();
+
+    await expect(
+      db.insert(users).values({ provider: "google", providerId: "g-1", email: "dup@example.com", name: "Dup" }),
+    ).rejects.toThrow();
+
+    const [session] = await db
+      .insert(sessions)
+      .values({ token: "tok_1", userId: user.id, expiresAt: new Date(Date.now() + 3600_000) })
+      .returning();
+    expect(session.userId).toBe(user.id);
+
+    await db.delete(sessions).where(eq(sessions.token, "tok_1"));
+    await db.delete(users).where(eq(users.id, user.id));
   });
 });

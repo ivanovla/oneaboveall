@@ -85,3 +85,29 @@ export const bans = pgTable("bans", {
   bannedUntil: timestamp("banned_until", { withTimezone: true }).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// A signed-in bidder. provider+providerId is the OAuth identity; id is what
+// the rest of the engine already calls bidderId (its columns are plain
+// `text`, so no other table changes — a user's id is used directly).
+// Two OAuth accounts for the same real person (one Google, one Apple)
+// deliberately produce two separate rows here — account linking is out of
+// scope.
+export const users = pgTable("users", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  provider: text("provider").notNull(), // "google" | "apple"
+  providerId: text("provider_id").notNull(),
+  email: text("email").notNull(),
+  name: text("name").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  providerIdentityIdx: uniqueIndex("users_provider_provider_id_idx").on(table.provider, table.providerId),
+}));
+
+// An opaque, server-validated session token — never a client-decodable JWT.
+// The browser only ever sees `token`, delivered as an httpOnly cookie.
+export const sessions = pgTable("sessions", {
+  token: text("token").primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
