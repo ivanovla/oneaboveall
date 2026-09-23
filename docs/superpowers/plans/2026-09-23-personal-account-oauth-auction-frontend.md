@@ -2384,7 +2384,7 @@ export default function LiveAuction({ apiBaseUrl }: { apiBaseUrl: string }) {
   if (!joined) {
     return (
       <div style={boxStyle}>
-        <div style={fieldLabelStyle}>Deposit to join this round</div>
+        <div style={fieldLabelStyle}>Deposit required to enter</div>
         <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: 34, marginTop: 6 }}>
           {formatMoney(round.depositCents)}
         </div>
@@ -2710,7 +2710,7 @@ export default function LiveAuction({ apiBaseUrl }: { apiBaseUrl: string }) {
   if (!joined) {
     return (
       <div style={boxStyle}>
-        <div style={fieldLabelStyle}>Deposit to join this round</div>
+        <div style={fieldLabelStyle}>Deposit required to enter</div>
         <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: 34, marginTop: 6 }}>
           {formatMoney(round.depositCents)}
         </div>
