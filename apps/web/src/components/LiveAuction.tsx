@@ -107,6 +107,62 @@ function JoinPaymentForm({ apiBaseUrl, roundId, onJoined }: { apiBaseUrl: string
   );
 }
 
+function BidForm({ apiBaseUrl, currentLeaderCents }: { apiBaseUrl: string; currentLeaderCents: number }) {
+  const [bidValue, setBidValue] = useState("");
+  const [status, setStatus] = useState<"idle" | "submitting" | "placed">("idle");
+  const [error, setError] = useState<string | null>(null);
+
+  async function submitBid() {
+    const digits = bidValue.replace(/[^\d]/g, "");
+    const amountCents = digits === "" ? 0 : Number(digits) * 100;
+    setStatus("submitting");
+    setError(null);
+
+    try {
+      const res = await fetch(`${apiBaseUrl}/bids`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ amountCents }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        setError(data.error ?? "Bid was rejected.");
+        setStatus("idle");
+        return;
+      }
+
+      setStatus("placed");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to place bid — please try again.");
+      setStatus("idle");
+    }
+  }
+
+  return (
+    <>
+      <div style={{ marginTop: 18 }}>
+        <label htmlFor="live-auction-bid" style={fieldLabelStyle}>
+          Your bid, $
+        </label>
+        <input
+          id="live-auction-bid"
+          type="text"
+          value={bidValue}
+          onChange={(e) => setBidValue(e.target.value)}
+          style={{ display: "block", width: "100%", marginTop: 8, padding: "12px 14px", background: "transparent", border: "1px solid var(--gold-soft)", color: "var(--fg)" }}
+        />
+      </div>
+      {error && <div style={{ marginTop: 10, fontSize: 12, color: "var(--fg-dim)" }}>{error}</div>}
+      {status === "placed" && <div style={{ marginTop: 10, fontSize: 12, color: "var(--gold)" }}>Bid placed — you can raise it again any time.</div>}
+      <button onClick={submitBid} disabled={status === "submitting"} style={primaryButtonStyle}>
+        {status === "submitting" ? "Placing…" : "Place bid"}
+      </button>
+    </>
+  );
+}
+
 export default function LiveAuction({ apiBaseUrl }: { apiBaseUrl: string }) {
   const [round, setRound] = useState<CurrentRoundInfo | "loading">("loading");
   const [joined, setJoined] = useState<boolean | null>(null);
@@ -220,13 +276,7 @@ export default function LiveAuction({ apiBaseUrl }: { apiBaseUrl: string }) {
       <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: 28, marginTop: 6 }}>
         {formatMoney(round.currentLeaderCents)}
       </div>
-      <div style={{ marginTop: 18 }}>
-        <label htmlFor="live-auction-bid" style={fieldLabelStyle}>
-          Your bid, $
-        </label>
-        <input id="live-auction-bid" type="text" style={{ display: "block", width: "100%", marginTop: 8, padding: "12px 14px", background: "transparent", border: "1px solid var(--gold-soft)", color: "var(--fg)" }} />
-      </div>
-      <button style={primaryButtonStyle}>Place bid</button>
+      <BidForm apiBaseUrl={apiBaseUrl} currentLeaderCents={round.currentLeaderCents} />
     </div>
   );
 }

@@ -154,4 +154,52 @@ describe("LiveAuction", () => {
     await waitFor(() => expect(joinButton.disabled).toBe(false)); // button re-enabled after error
     await waitFor(() => expect(screen.getByText(/network error/i)).toBeInTheDocument()); // error message shown
   });
+
+  it("submitting a bid calls POST /bids and shows a confirmation", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path === "/current-round") return { ok: true, json: async () => ({ roundId: "round-1", phase: "bidding", currentLeaderCents: 100_000, depositCents: 10_000, biddingClosesAt: "2026-09-23T12:00:00.000Z" }) };
+      if (path === "/rounds/round-1/me") return { ok: true, json: async () => ({ joined: true }) };
+      if (path === "/bids" && init?.method === "POST") return { ok: true, json: async () => ({ bidId: "bid-1" }) };
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const { fireEvent, screen, waitFor } = await import("@testing-library/react");
+    render(<LiveAuction apiBaseUrl="http://api.test" />);
+    await waitFor(() => expect(screen.getByLabelText(/your bid/i)).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText(/your bid/i), { target: { value: "1500" } });
+    fireEvent.click(screen.getByText("Place bid"));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("http://api.test/bids", {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ amountCents: 150_000 }),
+      }),
+    );
+    await waitFor(() => expect(screen.getByText(/bid placed/i)).toBeInTheDocument());
+  });
+
+  it("shows the engine's rejection reason when a bid is invalid", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path === "/current-round") return { ok: true, json: async () => ({ roundId: "round-1", phase: "bidding", currentLeaderCents: 100_000, depositCents: 10_000, biddingClosesAt: "2026-09-23T12:00:00.000Z" }) };
+      if (path === "/rounds/round-1/me") return { ok: true, json: async () => ({ joined: true }) };
+      if (path === "/bids" && init?.method === "POST") return { ok: false, status: 422, json: async () => ({ error: "Bid must be at least $1 above the current leader." }) };
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const { fireEvent, screen, waitFor } = await import("@testing-library/react");
+    render(<LiveAuction apiBaseUrl="http://api.test" />);
+    await waitFor(() => expect(screen.getByLabelText(/your bid/i)).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText(/your bid/i), { target: { value: "500" } });
+    fireEvent.click(screen.getByText("Place bid"));
+
+    await waitFor(() => expect(screen.getByText("Bid must be at least $1 above the current leader.")).toBeInTheDocument());
+  });
 });
