@@ -30,7 +30,7 @@ secret), `@fastify/cookie`, `@fastify/cors`, `@stripe/stripe-js` + `@stripe/reac
 - `apps/web/astro.config.mjs` stays `output: "static"`. No SSR adapter is added. Every new page
   is a static shell; all dynamic behavior is client-side `fetch` calls against `apps/api`.
 - `apps/api` and `apps/web` are different origins in local dev (`127.0.0.1:3001` vs
-  `127.0.0.1:4322`) and the same origin in production (Traefik path-routes
+  `127.0.0.1:4321`) and the same origin in production (Traefik path-routes
   `oneabobeall.org/api/*`) — cross-origin cookie delivery must work in dev, so every
   browser-facing fetch that needs the session cookie uses `credentials: "include"`, and
   `apps/api` is configured with CORS restricted to one known origin (never a wildcard, since
@@ -175,14 +175,14 @@ DATABASE_URL=postgres://auction:auction@localhost:5433/auction_engine_test
 PORT=3001
 STRIPE_SECRET_KEY=sk_test_...
 STRIPE_WEBHOOK_SECRET=whsec_...
-CORS_ORIGIN=http://127.0.0.1:4322
+CORS_ORIGIN=http://127.0.0.1:4321
 GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
 APPLE_TEAM_ID=...
 APPLE_KEY_ID=...
 APPLE_SERVICES_ID=...
 APPLE_PRIVATE_KEY_PATH=./apple-private-key.p8
-PUBLIC_APP_URL=http://127.0.0.1:4322
+PUBLIC_APP_URL=http://127.0.0.1:4321
 API_PUBLIC_URL=http://127.0.0.1:3001
 ```
 
@@ -346,7 +346,7 @@ Then run the full `apps/api` suite to confirm the new CORS/cookie registration d
 anything: `npm test --workspace=apps/api`. Every existing test builds the server via
 `buildServer()`, so a missing `CORS_ORIGIN` env var would now break them all — confirm
 `apps/api/.env` in this worktree already has `CORS_ORIGIN` set (it does not yet; add
-`CORS_ORIGIN=http://127.0.0.1:4322` to it now, the same way `STRIPE_SECRET_KEY` was added in an
+`CORS_ORIGIN=http://127.0.0.1:4321` to it now, the same way `STRIPE_SECRET_KEY` was added in an
 earlier plan — this file is gitignored and worktree-local, not part of the commit).
 
 - [ ] **Step 8: Commit**

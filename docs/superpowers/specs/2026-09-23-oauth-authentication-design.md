@@ -84,7 +84,7 @@ authenticated route look the token up against `sessions`, joined to `users`.
 **CORS:** `apps/web` (`astro.config.mjs` is `output: "static"` — confirmed in this branch,
 no SSR adapter exists) and `apps/api` are same-origin in production (Traefik path-routes
 `oneabobeall.org/api/*` to `apps/api`, per the deployment design), but are two different
-origins in local dev (`127.0.0.1:4322` vs `127.0.0.1:3001`). The account pages call
+origins in local dev (`127.0.0.1:4321` vs `127.0.0.1:3001`). The account pages call
 `fetch(..., { credentials: "include" })` from the browser (see Section B), which needs
 `apps/api` to send `Access-Control-Allow-Origin`/`Access-Control-Allow-Credentials` for the
 dev origin. Add `@fastify/cors`, configured from an env var (`CORS_ORIGIN`, defaulting to the

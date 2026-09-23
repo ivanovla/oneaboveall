@@ -57,6 +57,22 @@ export function buildServer(): FastifyInstance {
   if (!corsOrigin) {
     throw new Error("CORS_ORIGIN is required.");
   }
+  // Every route on this service is served with `credentials: true` (the
+  // session and OAuth-state cookies depend on it), and the CORS spec forbids
+  // combining a wildcard `Access-Control-Allow-Origin: *` with
+  // `Access-Control-Allow-Credentials: true`. The browser — not the server —
+  // is what rejects that pair, so a wildcard here boots perfectly happily and
+  // then fails every single cross-origin request from the real frontend, with
+  // the only symptom being a CORS error in the user's devtools. Failing at
+  // boot turns that into an unmissable deploy-time error instead.
+  //
+  // The comma-separated form is checked too: @fastify/cors accepts a list,
+  // and a stray "*" anywhere in it is the same mistake.
+  if (corsOrigin.split(",").some((origin) => origin.trim() === "*")) {
+    throw new Error(
+      'CORS_ORIGIN must not be "*": this server sends credentialed CORS responses, which browsers reject against a wildcard origin. Set it to the frontend\'s exact origin (e.g. http://127.0.0.1:4321).',
+    );
+  }
   app.register(fastifyCors, { origin: corsOrigin, credentials: true });
   app.register(fastifyCookie);
   // Apple's Sign in with Apple callback uses response_mode: "form_post" —

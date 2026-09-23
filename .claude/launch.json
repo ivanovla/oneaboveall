@@ -10,8 +10,8 @@
     {
       "name": "web-dev",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--workspace=apps/web", "--", "--host", "127.0.0.1", "--port", "4322"],
-      "port": 4322
+      "runtimeArgs": ["run", "dev", "--workspace=apps/web", "--", "--host", "127.0.0.1", "--port", "4321"],
+      "port": 4321
     }
   ]
 }
