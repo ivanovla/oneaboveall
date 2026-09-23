@@ -1,5 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
 import { buildServer } from "../src/server";
+import { beforeEach } from "vitest";
+import { __resetCacheForTests } from "../src/routes/currentRound";
+
+beforeEach(() => {
+  __resetCacheForTests();
+});
 
 // Not testing anything Stripe-related here, but server.ts now imports
 // stripeClient.ts unconditionally (Step 3 below), and that module throws at
@@ -42,5 +48,27 @@ describe("GET /current-round", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toBeNull();
+  });
+
+  it("caches the result for concurrent requests within the TTL — the engine query runs only once", async () => {
+    const { getCurrentRoundInfo } = await import("engine/queries/publicScene");
+    vi.mocked(getCurrentRoundInfo).mockClear();
+    vi.mocked(getCurrentRoundInfo).mockResolvedValue({
+      roundId: "round-1",
+      phase: "bidding",
+      currentLeaderCents: 100_000,
+      depositCents: 10_000,
+      biddingClosesAt: new Date("2026-09-23T12:00:00.000Z"),
+    });
+
+    const app = buildServer();
+    const [first, second] = await Promise.all([
+      app.inject({ method: "GET", url: "/current-round" }),
+      app.inject({ method: "GET", url: "/current-round" }),
+    ]);
+
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    expect(vi.mocked(getCurrentRoundInfo)).toHaveBeenCalledTimes(1);
   });
 });
