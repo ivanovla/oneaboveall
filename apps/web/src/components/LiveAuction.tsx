@@ -112,6 +112,7 @@ export default function LiveAuction({ apiBaseUrl }: { apiBaseUrl: string }) {
   const [joined, setJoined] = useState<boolean | null>(null);
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [joiningInFlight, setJoiningInFlight] = useState(false);
+  const [joinError, setJoinError] = useState<string | null>(null);
   const roundIdRef = useRef<string | null>(null);
 
   async function poll() {
@@ -166,10 +167,16 @@ export default function LiveAuction({ apiBaseUrl }: { apiBaseUrl: string }) {
 
   async function startJoin(roundId: string) {
     setJoiningInFlight(true);
-    const res = await fetch(`${apiBaseUrl}/rounds/${roundId}/join`, { method: "POST", credentials: "include" });
-    const data = await res.json();
-    setClientSecret(data.clientSecret);
-    setJoiningInFlight(false);
+    setJoinError(null);
+    try {
+      const res = await fetch(`${apiBaseUrl}/rounds/${roundId}/join`, { method: "POST", credentials: "include" });
+      const data = await res.json();
+      setClientSecret(data.clientSecret);
+    } catch (err) {
+      setJoinError(err instanceof Error ? err.message : "Failed to start join process — please try again.");
+    } finally {
+      setJoiningInFlight(false);
+    }
   }
 
   if (round === "loading") {
@@ -196,9 +203,12 @@ export default function LiveAuction({ apiBaseUrl }: { apiBaseUrl: string }) {
             <JoinPaymentForm apiBaseUrl={apiBaseUrl} roundId={round.roundId} onJoined={() => setJoined(true)} />
           </Elements>
         ) : (
-          <button onClick={() => startJoin(round.roundId)} disabled={joiningInFlight} style={primaryButtonStyle}>
-            {joiningInFlight ? "Starting…" : "Join"}
-          </button>
+          <>
+            <button onClick={() => startJoin(round.roundId)} disabled={joiningInFlight} style={primaryButtonStyle}>
+              {joiningInFlight ? "Starting…" : "Join"}
+            </button>
+            {joinError && <div style={{ marginTop: 10, fontSize: 12, color: "var(--fg-dim)" }}>{joinError}</div>}
+          </>
         )}
       </div>
     );

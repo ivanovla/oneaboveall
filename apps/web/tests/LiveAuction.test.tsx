@@ -133,4 +133,25 @@ describe("LiveAuction", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("http://api.test/rounds/round-1/join", { method: "POST", credentials: "include" }));
     await waitFor(() => expect(screen.getByTestId("payment-element")).toBeInTheDocument());
   });
+
+  it("clicking Join when the request fails shows an error and re-enables the button", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path === "/current-round") return { ok: true, json: async () => ({ roundId: "round-1", phase: "bidding", currentLeaderCents: 100_000, depositCents: 10_000, biddingClosesAt: "2026-09-23T12:00:00.000Z" }) };
+      if (path === "/rounds/round-1/me") return { ok: true, json: async () => ({ joined: false }) };
+      if (path === "/rounds/round-1/join" && init?.method === "POST") throw new Error("Network error");
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const { fireEvent, screen, waitFor } = await import("@testing-library/react");
+    render(<LiveAuction apiBaseUrl="http://api.test" />);
+    await waitFor(() => expect(screen.getByText("Join")).toBeInTheDocument());
+
+    const joinButton = screen.getByText("Join") as HTMLButtonElement;
+    fireEvent.click(joinButton);
+
+    await waitFor(() => expect(joinButton.disabled).toBe(false)); // button re-enabled after error
+    await waitFor(() => expect(screen.getByText(/network error/i)).toBeInTheDocument()); // error message shown
+  });
 });
