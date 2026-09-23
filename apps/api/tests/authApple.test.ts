@@ -73,6 +73,23 @@ describe("GET /auth/apple", () => {
     const cookies = Array.isArray(response.headers["set-cookie"]) ? response.headers["set-cookie"] : [response.headers["set-cookie"]];
     expect(cookies.some((c) => c?.includes("oneabobeall_oauth_state="))).toBe(true);
   });
+
+  // Unlike Google's state cookie (SameSite=Lax, correct for its GET-based
+  // callback), Apple's callback is a cross-site POST from
+  // appleid.apple.com, which a Lax cookie is never sent on. This locks in
+  // that the state cookie actually carries SameSite=None (with Secure,
+  // required by browsers for None) rather than silently regressing back to
+  // Lax — a mistake that `app.inject`'s cookie-header injection in the
+  // other tests below would NOT catch on its own, since inject bypasses
+  // real browser SameSite enforcement entirely.
+  it("sets the state cookie with SameSite=None so it survives Apple's cross-site POST callback", async () => {
+    const app = buildServer();
+    const response = await app.inject({ method: "GET", url: "/auth/apple" });
+
+    const stateCookie = getSetCookieHeader(response, OAUTH_STATE_COOKIE_NAME);
+    expect(stateCookie).toMatch(/SameSite=None/i);
+    expect(stateCookie).toMatch(/Secure/i);
+  });
 });
 
 describe("POST /auth/apple/callback", () => {
@@ -168,6 +185,75 @@ describe("POST /auth/apple/callback", () => {
     expect(user.providerId).toBe("apple-sub-1");
     expect(user.name).toBe("A Person");
     expect(user.email).toBe("a@privaterelay.appleid.com");
+  });
+
+  // Apple's response_mode: "form_post" callback arrives as a real
+  // application/x-www-form-urlencoded POST body, not JSON — every other
+  // test in this file uses `payload: {...}` with inject's default JSON
+  // encoding, which would pass even if the server had no
+  // application/x-www-form-urlencoded parser registered at all (the exact
+  // gap that made real Apple sign-in 415 before this fix). This test sends
+  // a real urlencoded body with an explicit Content-Type, exercising the
+  // actual @fastify/formbody registration in server.ts end to end.
+  it("parses a real application/x-www-form-urlencoded callback body (Apple's actual wire format)", async () => {
+    const app = buildServer();
+    const stateResponse = await app.inject({ method: "GET", url: "/auth/apple" });
+    const stateCookie = (Array.isArray(stateResponse.headers["set-cookie"]) ? stateResponse.headers["set-cookie"] : [stateResponse.headers["set-cookie"]])
+      .find((c) => c?.includes("oneabobeall_oauth_state="))!;
+
+    const body = new URLSearchParams({
+      code: "mock-code",
+      state: "mock-state",
+      user: JSON.stringify({ name: { firstName: "A", lastName: "Person" }, email: "a@privaterelay.appleid.com" }),
+    }).toString();
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/auth/apple/callback",
+      headers: {
+        cookie: stateCookie.split(";")[0],
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      payload: body,
+    });
+
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe(process.env.PUBLIC_APP_URL + "/account");
+    expect(callback).toHaveBeenCalled();
+
+    const [user] = await db.select().from(users).where(eq(users.provider, "apple"));
+    expect(user.providerId).toBe("apple-sub-1");
+    expect(user.name).toBe("A Person");
+  });
+
+  // The unsigned "user" JSON blob is a plain form field Apple does not
+  // cryptographically verify — a client completing a legitimate sign-in
+  // could submit a forged email there. The verified id_token's "email"
+  // claim must win whenever both are present.
+  it("prefers the signed id_token's email claim over the unsigned 'user' blob's email", async () => {
+    callback.mockImplementationOnce(async () => ({
+      claims: () => ({ sub: "apple-sub-1", email: "verified@example.com" }),
+    }));
+
+    const app = buildServer();
+    const stateResponse = await app.inject({ method: "GET", url: "/auth/apple" });
+    const stateCookie = (Array.isArray(stateResponse.headers["set-cookie"]) ? stateResponse.headers["set-cookie"] : [stateResponse.headers["set-cookie"]])
+      .find((c) => c?.includes("oneabobeall_oauth_state="))!;
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/auth/apple/callback",
+      headers: { cookie: stateCookie.split(";")[0] },
+      payload: {
+        code: "mock-code",
+        state: "mock-state",
+        user: JSON.stringify({ name: { firstName: "A", lastName: "Person" }, email: "forged@attacker.example" }),
+      },
+    });
+
+    expect(response.statusCode).toBe(302);
+    const [user] = await db.select().from(users).where(eq(users.provider, "apple"));
+    expect(user.email).toBe("verified@example.com");
   });
 
   it("a returning user's callback (no 'user' field) reuses the existing row without erasing name/email", async () => {

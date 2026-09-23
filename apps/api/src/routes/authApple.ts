@@ -11,6 +11,7 @@ import { generateAppleClientSecret } from "../auth/appleClientSecret";
 import { db } from "engine/db/client";
 import { users } from "engine/db/schema";
 import { and, eq } from "drizzle-orm";
+import secureJson from "secure-json-parse";
 
 // Same requireEnv pattern as routes/authGoogle.ts (see that file for the
 // full rationale): fail at boot on a misconfigured deploy rather than on
@@ -67,10 +68,19 @@ export function registerAppleAuthRoutes(app: FastifyInstance): void {
     // Packed into one cookie value (state + verifier), same as Google's
     // flow — both are needed back at the callback and no user session
     // exists yet to store them against server-side.
+    //
+    // sameSite MUST be "none" here, unlike Google's "lax" — Apple's
+    // callback arrives as a cross-site POST (appleid.apple.com ->
+    // API_PUBLIC_URL, via response_mode: "form_post"), and a Lax cookie is
+    // only sent on cross-site top-level *GET* navigations, never on a
+    // cross-site POST. With "lax" here, this cookie would simply never
+    // arrive at POST /auth/apple/callback in production, and every real
+    // sign-in would hit the "missing state cookie" branch. "none" requires
+    // `secure: true` (already set), which the browser enforces.
     reply.setCookie(OAUTH_STATE_COOKIE_NAME, `${state}.${codeVerifier}`, {
       httpOnly: true,
       secure: true,
-      sameSite: "lax",
+      sameSite: "none",
       maxAge: 600,
       path: "/",
     });
@@ -129,7 +139,7 @@ export function registerAppleAuthRoutes(app: FastifyInstance): void {
       const clientSecret = await generateAppleClientSecret();
       const client = await getAppleClient(clientSecret);
 
-      let claims: { sub: string };
+      let claims: { sub: string; email?: string };
       try {
         const tokenSet = await client.callback(
           APPLE_CALLBACK_URL,
@@ -143,52 +153,72 @@ export function registerAppleAuthRoutes(app: FastifyInstance): void {
         return;
       }
 
-      const [existing] = await db
-        .select()
-        .from(users)
-        .where(and(eq(users.provider, "apple"), eq(users.providerId, claims.sub)))
-        .limit(1);
+      // Everything below (the user lookup/insert and session creation) can
+      // fail independently of the token exchange above — a DB error, or a
+      // unique-constraint violation from two concurrent first-time
+      // callbacks racing for the same (provider, providerId) — and must
+      // still land the user back in the app rather than a raw 500, same as
+      // every other failure branch in this handler.
+      try {
+        const [existing] = await db
+          .select()
+          .from(users)
+          .where(and(eq(users.provider, "apple"), eq(users.providerId, claims.sub)))
+          .limit(1);
 
-      let user = existing;
-      if (!user) {
-        // Apple includes this JSON-encoded "user" field, carrying name and
-        // email, ONLY on the very first authorization for this app — every
-        // later sign-in for the same (provider, providerId) omits it
-        // entirely (and Apple's id_token itself never carries a name claim
-        // at all). It must be captured now, on creation; it will never be
-        // sent again for this user.
-        let email = "";
-        let name = "";
-        if (request.body?.user) {
-          try {
-            const parsed = JSON.parse(request.body.user) as {
-              email?: string;
-              name?: { firstName?: string; lastName?: string };
-            };
-            email = parsed.email ?? "";
-            name = [parsed.name?.firstName, parsed.name?.lastName].filter(Boolean).join(" ");
-          } catch {
-            // Malformed "user" field — proceed with an empty name/email
-            // rather than failing the whole sign-in over a non-essential
-            // field.
+        let user = existing;
+        if (!user) {
+          // Apple includes this JSON-encoded "user" field, carrying name
+          // and email, ONLY on the very first authorization for this app —
+          // every later sign-in for the same (provider, providerId) omits
+          // it entirely. It must be captured now, on creation; it will
+          // never be sent again for this user.
+          //
+          // Email is preferred from `claims.email` — a claim on Apple's
+          // cryptographically-signed id_token, present whenever the
+          // "email" scope was granted, including on returning users — over
+          // the unsigned "user" JSON blob's email, which Apple explicitly
+          // documents as a plain form field with no signature: a malicious
+          // client completing a legitimate sign-in could submit a forged
+          // value there. The blob is only the fallback, and only "name" is
+          // ever taken from it, since Apple's id_token has no name claim at
+          // all — there is no verified source for it.
+          let unsignedEmail: string | undefined;
+          let name = "";
+          if (request.body?.user) {
+            try {
+              const parsed = secureJson.parse(request.body.user, null, {
+                protoAction: "error",
+                constructorAction: "error",
+              }) as { email?: string; name?: { firstName?: string; lastName?: string } };
+              unsignedEmail = parsed.email;
+              name = [parsed.name?.firstName, parsed.name?.lastName].filter(Boolean).join(" ");
+            } catch {
+              // Malformed "user" field — proceed with an empty name rather
+              // than failing the whole sign-in over a non-essential field.
+            }
           }
+          const email = claims.email ?? unsignedEmail ?? "";
+          [user] = await db
+            .insert(users)
+            .values({ provider: "apple", providerId: claims.sub, email, name })
+            .returning();
         }
-        [user] = await db
-          .insert(users)
-          .values({ provider: "apple", providerId: claims.sub, email, name })
-          .returning();
+
+        const { token, expiresAt } = await createSession(user.id);
+        reply.setCookie(SESSION_COOKIE_NAME, token, {
+          httpOnly: true,
+          secure: true,
+          sameSite: "lax",
+          expires: expiresAt,
+          path: "/",
+        });
+
+        reply.redirect(`${PUBLIC_APP_URL}/account`);
+      } catch (err) {
+        request.log.error({ err }, "Apple OAuth callback: user/session creation failed");
+        reply.redirect(SIGN_IN_FAILED_REDIRECT);
       }
-
-      const { token, expiresAt } = await createSession(user.id);
-      reply.setCookie(SESSION_COOKIE_NAME, token, {
-        httpOnly: true,
-        secure: true,
-        sameSite: "lax",
-        expires: expiresAt,
-        path: "/",
-      });
-
-      reply.redirect(`${PUBLIC_APP_URL}/account`);
     },
   );
 }

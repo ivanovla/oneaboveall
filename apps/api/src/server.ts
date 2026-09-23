@@ -2,6 +2,7 @@ import "dotenv/config";
 import Fastify, { type FastifyInstance } from "fastify";
 import fastifyCookie from "@fastify/cookie";
 import fastifyCors from "@fastify/cors";
+import fastifyFormbody from "@fastify/formbody";
 import secureJson from "secure-json-parse";
 import { registerSceneRoute } from "./routes/scene";
 import { registerLeaderboardRoute } from "./routes/leaderboard";
@@ -56,6 +57,15 @@ export function buildServer(): FastifyInstance {
   }
   app.register(fastifyCors, { origin: corsOrigin, credentials: true });
   app.register(fastifyCookie);
+  // Apple's Sign in with Apple callback uses response_mode: "form_post" —
+  // the browser POSTs the callback (code, state, and the one-time "user"
+  // JSON blob) as application/x-www-form-urlencoded, not JSON. Fastify has
+  // no built-in parser for that content type, so without this the request
+  // 415s before POST /auth/apple/callback's handler ever runs. This is the
+  // standard, well-tested plugin for it (same reasoning as using
+  // @fastify/cookie/@fastify/cors above rather than hand-rolling that
+  // plumbing).
+  app.register(fastifyFormbody);
 
   // Captures the raw request bytes onto request.rawBody in addition to the
   // normal parsed JSON body — Stripe's webhook signature check needs the
