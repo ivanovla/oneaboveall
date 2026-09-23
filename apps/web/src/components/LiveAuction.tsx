@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { loadStripe, type Stripe as StripeClient } from "@stripe/stripe-js";
+import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { formatMoney } from "../lib/format";
 
 type CurrentRoundInfo = {
@@ -37,9 +39,63 @@ const primaryButtonStyle: React.CSSProperties = {
   textTransform: "uppercase",
 };
 
+let stripePromise: Promise<StripeClient | null> | null = null;
+function getStripe(): Promise<StripeClient | null> {
+  if (!stripePromise) {
+    stripePromise = loadStripe(import.meta.env.STRIPE_PUBLISHABLE_KEY ?? "");
+  }
+  return stripePromise;
+}
+
+function JoinPaymentForm({ apiBaseUrl, roundId, onJoined }: { apiBaseUrl: string; roundId: string; onJoined: () => void }) {
+  const stripe = useStripe();
+  const elements = useElements();
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleConfirm() {
+    if (!stripe || !elements) return;
+    setSubmitting(true);
+    setError(null);
+
+    const { error: confirmError } = await stripe.confirmPayment({ elements, redirect: "if_required" });
+    if (confirmError) {
+      setError(confirmError.message ?? "Payment failed.");
+      setSubmitting(false);
+      return;
+    }
+
+    // The deposit is confirmed on the client, but joinRound runs from the
+    // webhook, which can land a moment after this — poll /rounds/:id/me until
+    // it reflects the join rather than assuming it's instant.
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const res = await fetch(`${apiBaseUrl}/rounds/${roundId}/me`, { credentials: "include" });
+      const data = await res.json();
+      if (data.joined) {
+        onJoined();
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    setError("Payment succeeded, but joining is taking longer than expected — refresh in a moment.");
+    setSubmitting(false);
+  }
+
+  return (
+    <div style={{ marginTop: 18 }}>
+      <PaymentElement />
+      {error && <div style={{ marginTop: 10, fontSize: 12, color: "var(--fg-dim)" }}>{error}</div>}
+      <button onClick={handleConfirm} disabled={submitting} style={primaryButtonStyle}>
+        {submitting ? "Confirming…" : "Confirm payment"}
+      </button>
+    </div>
+  );
+}
+
 export default function LiveAuction({ apiBaseUrl }: { apiBaseUrl: string }) {
   const [round, setRound] = useState<CurrentRoundInfo | "loading">("loading");
   const [joined, setJoined] = useState<boolean | null>(null);
+  const [clientSecret, setClientSecret] = useState<string | null>(null);
   const roundIdRef = useRef<string | null>(null);
 
   async function poll() {
@@ -92,6 +148,13 @@ export default function LiveAuction({ apiBaseUrl }: { apiBaseUrl: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiBaseUrl]);
 
+  async function startJoin() {
+    if (!round) return;
+    const res = await fetch(`${apiBaseUrl}/rounds/${round.roundId}/join`, { method: "POST", credentials: "include" });
+    const data = await res.json();
+    setClientSecret(data.clientSecret);
+  }
+
   if (round === "loading") {
     return <div style={{ color: "var(--fg-dim)" }}>Loading…</div>;
   }
@@ -111,7 +174,15 @@ export default function LiveAuction({ apiBaseUrl }: { apiBaseUrl: string }) {
         <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: 34, marginTop: 6 }}>
           {formatMoney(round.depositCents)}
         </div>
-        <button style={primaryButtonStyle}>Join</button>
+        {clientSecret ? (
+          <Elements stripe={getStripe()} options={{ clientSecret }}>
+            <JoinPaymentForm apiBaseUrl={apiBaseUrl} roundId={round.roundId} onJoined={() => setJoined(true)} />
+          </Elements>
+        ) : (
+          <button onClick={startJoin} style={primaryButtonStyle}>
+            Join
+          </button>
+        )}
       </div>
     );
   }

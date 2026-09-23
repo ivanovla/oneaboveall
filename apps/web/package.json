@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@astrojs/react": "^3.6.0",
+    "@stripe/react-stripe-js": "^2.8.1",
+    "@stripe/stripe-js": "^4.8.0",
     "astro": "^4.15.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0"

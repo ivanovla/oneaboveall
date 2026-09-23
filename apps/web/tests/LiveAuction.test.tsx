@@ -2,6 +2,19 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, waitFor, act } from "@testing-library/react";
 import LiveAuction from "../src/components/LiveAuction";
 
+vi.mock("@stripe/stripe-js", () => ({
+  loadStripe: vi.fn(async () => ({
+    confirmPayment: vi.fn(async () => ({ error: undefined })),
+  })),
+}));
+
+vi.mock("@stripe/react-stripe-js", () => ({
+  Elements: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  PaymentElement: () => <div data-testid="payment-element" />,
+  useStripe: () => ({ confirmPayment: vi.fn(async () => ({ error: undefined })) }),
+  useElements: () => ({}),
+}));
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -99,5 +112,25 @@ describe("LiveAuction", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(fetchMock.mock.calls.length).toBeGreaterThan(callsWhileHidden); // an immediate re-fetch on becoming visible
+  });
+
+  it("clicking Join creates a PaymentIntent and mounts the Stripe payment form", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path === "/current-round") return { ok: true, json: async () => ({ roundId: "round-1", phase: "bidding", currentLeaderCents: 100_000, depositCents: 10_000, biddingClosesAt: "2026-09-23T12:00:00.000Z" }) };
+      if (path === "/rounds/round-1/me") return { ok: true, json: async () => ({ joined: false }) };
+      if (path === "/rounds/round-1/join" && init?.method === "POST") return { ok: true, json: async () => ({ clientSecret: "pi_1_secret_x", depositCents: 10_000 }) };
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const { fireEvent, screen, waitFor } = await import("@testing-library/react");
+    render(<LiveAuction apiBaseUrl="http://api.test" />);
+    await waitFor(() => expect(screen.getByText("Join")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText("Join"));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("http://api.test/rounds/round-1/join", { method: "POST", credentials: "include" }));
+    await waitFor(() => expect(screen.getByTestId("payment-element")).toBeInTheDocument());
   });
 });
