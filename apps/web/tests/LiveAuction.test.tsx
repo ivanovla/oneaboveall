@@ -202,4 +202,37 @@ describe("LiveAuction", () => {
 
     await waitFor(() => expect(screen.getByText("Bid must be at least $1 above the current leader.")).toBeInTheDocument());
   });
+
+  it("filters decimal input to prevent silent multiplication errors", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path === "/current-round") return { ok: true, json: async () => ({ roundId: "round-1", phase: "bidding", currentLeaderCents: 100_000, depositCents: 10_000, biddingClosesAt: "2026-09-23T12:00:00.000Z" }) };
+      if (path === "/rounds/round-1/me") return { ok: true, json: async () => ({ joined: true }) };
+      if (path === "/bids" && init?.method === "POST") return { ok: true, json: async () => ({ bidId: "bid-2" }) };
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const { fireEvent, screen, waitFor } = await import("@testing-library/react");
+    render(<LiveAuction apiBaseUrl="http://api.test" />);
+    await waitFor(() => expect(screen.getByLabelText(/your bid/i)).toBeInTheDocument());
+
+    const bidInput = screen.getByLabelText(/your bid/i) as HTMLInputElement;
+    // User intends to type $15.50 but the decimal is filtered out as typed
+    fireEvent.change(bidInput, { target: { value: "15.50" } });
+    // Field should only contain digits, no decimal
+    expect(bidInput.value).toBe("1550");
+
+    fireEvent.click(screen.getByText("Place bid"));
+
+    // Verify the fetch was called with 155000 cents ($1550), not an inflated value
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("http://api.test/bids", {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ amountCents: 155_000 }),
+      }),
+    );
+  });
 });

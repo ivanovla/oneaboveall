@@ -150,7 +150,7 @@ function BidForm({ apiBaseUrl, currentLeaderCents }: { apiBaseUrl: string; curre
           id="live-auction-bid"
           type="text"
           value={bidValue}
-          onChange={(e) => setBidValue(e.target.value)}
+          onChange={(e) => setBidValue(e.target.value.replace(/[^\d]/g, ""))}
           style={{ display: "block", width: "100%", marginTop: 8, padding: "12px 14px", background: "transparent", border: "1px solid var(--gold-soft)", color: "var(--fg)" }}
         />
       </div>
