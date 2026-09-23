@@ -1,0 +1,12 @@
+---
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import AccountShell from "../../components/AccountShell";
+import LiveAuction from "../../components/LiveAuction";
+
+const apiBaseUrl = import.meta.env.API_BASE_URL ?? "http://127.0.0.1:3001";
+---
+<BaseLayout title="oneabobeall — Auction">
+  <AccountShell client:load apiBaseUrl={apiBaseUrl}>
+    <LiveAuction client:load apiBaseUrl={apiBaseUrl} />
+  </AccountShell>
+</BaseLayout>

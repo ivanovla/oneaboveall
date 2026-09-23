@@ -1,0 +1,103 @@
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { render, screen, waitFor, act } from "@testing-library/react";
+import LiveAuction from "../src/components/LiveAuction";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
+
+function mockFetchSequence(responses: Record<string, unknown>) {
+  return vi.fn(async (url: string) => {
+    const path = new URL(url).pathname;
+    if (path === "/current-round") return { ok: true, json: async () => responses.currentRound };
+    if (path.match(/^\/rounds\/.+\/me$/)) return { ok: true, json: async () => responses.participation };
+    throw new Error(`unexpected fetch: ${url}`);
+  });
+}
+
+describe("LiveAuction", () => {
+  it("shows a loading state before the first fetch resolves", () => {
+    global.fetch = vi.fn(() => new Promise(() => {})) as unknown as typeof fetch;
+    render(<LiveAuction apiBaseUrl="http://api.test" />);
+    expect(screen.getByText(/loading/i)).toBeInTheDocument();
+  });
+
+  it("shows the Join card when the signed-in user hasn't joined", async () => {
+    global.fetch = mockFetchSequence({
+      currentRound: { roundId: "round-1", phase: "bidding", currentLeaderCents: 100_000, depositCents: 10_000, biddingClosesAt: "2026-09-23T12:00:00.000Z" },
+      participation: { joined: false },
+    }) as unknown as typeof fetch;
+    render(<LiveAuction apiBaseUrl="http://api.test" />);
+    await waitFor(() => expect(screen.getByText(/join/i)).toBeInTheDocument());
+    expect(screen.getByText("$100")).toBeInTheDocument(); // depositCents: 10_000 -> formatMoney -> "$100"
+  });
+
+  it("shows the bid form when the signed-in user has already joined", async () => {
+    global.fetch = mockFetchSequence({
+      currentRound: { roundId: "round-1", phase: "bidding", currentLeaderCents: 100_000, depositCents: 10_000, biddingClosesAt: "2026-09-23T12:00:00.000Z" },
+      participation: { joined: true },
+    }) as unknown as typeof fetch;
+    render(<LiveAuction apiBaseUrl="http://api.test" />);
+    await waitFor(() => expect(screen.getByLabelText(/your bid/i)).toBeInTheDocument());
+  });
+
+  it("shows a null-round state when there's no active reign yet", async () => {
+    global.fetch = vi.fn(async (url: string) => {
+      if (new URL(url).pathname === "/current-round") return { ok: true, json: async () => null };
+      throw new Error("should not call /rounds/:id/me with no round");
+    }) as unknown as typeof fetch;
+    render(<LiveAuction apiBaseUrl="http://api.test" />);
+    await waitFor(() => expect(screen.getByText(/no active round/i)).toBeInTheDocument());
+  });
+
+  it("re-polls /current-round every 5s while the tab is visible", async () => {
+    vi.useFakeTimers();
+    const fetchMock = mockFetchSequence({
+      currentRound: { roundId: "round-1", phase: "bidding", currentLeaderCents: 100_000, depositCents: 10_000, biddingClosesAt: "2026-09-23T12:00:00.000Z" },
+      participation: { joined: false },
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<LiveAuction apiBaseUrl="http://api.test" />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const callsAfterMount = fetchMock.mock.calls.length;
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(callsAfterMount);
+  });
+
+  it("pauses polling when the tab is hidden and resumes on visible", async () => {
+    vi.useFakeTimers();
+    const fetchMock = mockFetchSequence({
+      currentRound: { roundId: "round-1", phase: "bidding", currentLeaderCents: 100_000, depositCents: 10_000, biddingClosesAt: "2026-09-23T12:00:00.000Z" },
+      participation: { joined: false },
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<LiveAuction apiBaseUrl="http://api.test" />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+    document.dispatchEvent(new Event("visibilitychange"));
+    const callsWhileHidden = fetchMock.mock.calls.length;
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(fetchMock.mock.calls.length).toBe(callsWhileHidden); // no new calls while hidden
+
+    Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+    document.dispatchEvent(new Event("visibilitychange"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(callsWhileHidden); // an immediate re-fetch on becoming visible
+  });
+});
