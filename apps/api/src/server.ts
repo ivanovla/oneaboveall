@@ -1,5 +1,7 @@
 import "dotenv/config";
 import Fastify, { type FastifyInstance } from "fastify";
+import fastifyCookie from "@fastify/cookie";
+import fastifyCors from "@fastify/cors";
 import secureJson from "secure-json-parse";
 import { registerSceneRoute } from "./routes/scene";
 import { registerLeaderboardRoute } from "./routes/leaderboard";
@@ -18,6 +20,13 @@ declare module "fastify" {
 
 export function buildServer(): FastifyInstance {
   const app = Fastify({ logger: true });
+
+  const corsOrigin = process.env.CORS_ORIGIN;
+  if (!corsOrigin) {
+    throw new Error("CORS_ORIGIN is required.");
+  }
+  app.register(fastifyCors, { origin: corsOrigin, credentials: true });
+  app.register(fastifyCookie);
 
   // Captures the raw request bytes onto request.rawBody in addition to the
   // normal parsed JSON body — Stripe's webhook signature check needs the

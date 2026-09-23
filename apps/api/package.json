@@ -11,6 +11,8 @@
   "dependencies": {
     "engine": "*",
     "fastify": "^4.28.1",
+    "@fastify/cookie": "^9.4.0",
+    "@fastify/cors": "^9.0.1",
     "dotenv": "^17.4.2",
     "secure-json-parse": "^2.7.0",
     "stripe": "^17.4.0"
