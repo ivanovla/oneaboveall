@@ -71,4 +71,27 @@ describe("GET /current-round", () => {
     expect(second.statusCode).toBe(200);
     expect(vi.mocked(getCurrentRoundInfo)).toHaveBeenCalledTimes(1);
   });
+
+  it("does not permanently poison the cache after a transient DB failure", async () => {
+    const { getCurrentRoundInfo } = await import("engine/queries/publicScene");
+    vi.mocked(getCurrentRoundInfo).mockClear();
+    vi.mocked(getCurrentRoundInfo).mockRejectedValueOnce(new Error("DB connection blip"));
+
+    const app = buildServer();
+    const failed = await app.inject({ method: "GET", url: "/current-round" });
+    expect(failed.statusCode).toBe(500);
+
+    vi.mocked(getCurrentRoundInfo).mockResolvedValueOnce({
+      roundId: "round-2",
+      phase: "bidding",
+      currentLeaderCents: 200_000,
+      depositCents: 20_000,
+      biddingClosesAt: new Date("2026-09-23T13:00:00.000Z"),
+    });
+
+    const recovered = await app.inject({ method: "GET", url: "/current-round" });
+    expect(recovered.statusCode).toBe(200);
+    expect(recovered.json().roundId).toBe("round-2");
+    expect(vi.mocked(getCurrentRoundInfo)).toHaveBeenCalledTimes(2);
+  });
 });

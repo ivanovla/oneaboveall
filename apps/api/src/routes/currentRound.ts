@@ -18,11 +18,20 @@ async function getCachedCurrentRoundInfo() {
     return cached.value;
   }
   if (!pending) {
-    pending = getCurrentRoundInfo(new Date()).then((value) => {
-      cached = { value, expiresAt: Date.now() + CACHE_TTL_MS };
-      pending = null;
-      return value;
-    });
+    pending = getCurrentRoundInfo(new Date()).then(
+      (value) => {
+        cached = { value, expiresAt: Date.now() + CACHE_TTL_MS };
+        pending = null;
+        return value;
+      },
+      (err) => {
+        // Clear pending on rejection (without populating cached) so the next
+        // call retries against the DB instead of permanently returning this
+        // same rejected promise after one transient failure.
+        pending = null;
+        throw err;
+      },
+    );
   }
   return pending;
 }
