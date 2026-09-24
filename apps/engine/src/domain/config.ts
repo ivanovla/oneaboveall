@@ -7,7 +7,8 @@ export const MIN_INCREMENT_CENTS = 100; // $1
 export const MAX_BID_CENTS = 2_000_000_000; // $20,000,000
 
 export const DEPOSIT_PERCENT = 0.10;
-export const DEPOSIT_CAP_CENTS = 100_000; // $1,000
+export const DEPOSIT_MIN_CENTS = 100; // $1
+export const DEPOSIT_CAP_CENTS = 1_000_000; // $10,000
 
 export const BIDDING_PHASE_MS = 12 * 60 * 60 * 1000;
 export const PAYMENT_PHASE_MS = 12 * 60 * 60 * 1000;

@@ -1,5 +1,6 @@
 const DEPOSIT_PERCENT = 0.10;
-const DEPOSIT_CAP_CENTS = 100_000;
+const DEPOSIT_MIN_CENTS = 100;
+const DEPOSIT_CAP_CENTS = 1_000_000;
 
 export function formatMoney(cents: number): string {
   return "$" + Math.round(cents / 100).toLocaleString("en-US");
@@ -15,5 +16,6 @@ export function formatCountdown(msRemaining: number): string {
 }
 
 export function calculateDepositDisplay(bidCents: number): number {
-  return Math.min(DEPOSIT_CAP_CENTS, Math.round(bidCents * DEPOSIT_PERCENT));
+  const raw = Math.round(bidCents * DEPOSIT_PERCENT);
+  return Math.min(DEPOSIT_CAP_CENTS, Math.max(DEPOSIT_MIN_CENTS, raw));
 }

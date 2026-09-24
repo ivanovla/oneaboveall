@@ -26,7 +26,11 @@ describe("calculateDepositDisplay", () => {
     expect(calculateDepositDisplay(10_000)).toBe(1_000);
   });
 
-  it("caps at $1,000 (100,000 cents)", () => {
-    expect(calculateDepositDisplay(50_000_000)).toBe(100_000);
+  it("caps at $10,000 (1,000,000 cents)", () => {
+    expect(calculateDepositDisplay(500_000_000)).toBe(1_000_000);
+  });
+
+  it("floors at $1 (100 cents) for a very small bid", () => {
+    expect(calculateDepositDisplay(500)).toBe(100); // 10% of $5 is $0.50, floored to $1
   });
 });

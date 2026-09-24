@@ -511,7 +511,7 @@ export default function AuctionFlow({
             <div>
               <div style={{ fontSize: 13 }}>Deposit charged now</div>
               <div style={{ marginTop: 4, fontSize: 11, color: "var(--fg-dim)" }}>
-                10% of the bid, capped at $1,000
+                10% of the bid, min $1, capped at $10,000
               </div>
             </div>
             <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: 30, whiteSpace: "nowrap" }}>
@@ -544,8 +544,7 @@ export default function AuctionFlow({
             Bid {formatMoney(bidCents)} accepted
           </div>
           <div style={{ marginTop: 12, fontSize: 13, lineHeight: 1.65, color: "var(--fg-dim)" }}>
-            The seat is yours if no one outbids you before the window closes. Queue snapshot at 9:00
-            PM MSK.
+            The seat is yours if no one outbids you before the window closes.
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 22 }}>
             <div style={boxStyle}>
