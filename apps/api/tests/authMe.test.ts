@@ -45,6 +45,65 @@ describe("GET /auth/me", () => {
   });
 });
 
+describe("PATCH /auth/email", () => {
+  it("returns 401 with no session cookie", async () => {
+    const app = buildServer();
+    const response = await app.inject({ method: "PATCH", url: "/auth/email", payload: { email: "new@example.com" } });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("updates the signed-in user's email and persists it", async () => {
+    const [user] = await db.insert(users).values({ provider: "google", providerId: "g-3", email: "old@example.com", name: "C" }).returning();
+    const { token } = await createSession(user.id);
+
+    const app = buildServer();
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/auth/email",
+      headers: { cookie: `oneabobeall_session=${token}` },
+      payload: { email: "new@example.com" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ id: user.id, email: "new@example.com" });
+
+    const [row] = await db.select().from(users).where(eq(users.id, user.id));
+    expect(row.email).toBe("new@example.com");
+  });
+
+  it("rejects a value with no @ with 400, and does not touch the stored email", async () => {
+    const [user] = await db.insert(users).values({ provider: "google", providerId: "g-4", email: "old@example.com", name: "D" }).returning();
+    const { token } = await createSession(user.id);
+
+    const app = buildServer();
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/auth/email",
+      headers: { cookie: `oneabobeall_session=${token}` },
+      payload: { email: "not-an-email" },
+    });
+
+    expect(response.statusCode).toBe(400);
+    const [row] = await db.select().from(users).where(eq(users.id, user.id));
+    expect(row.email).toBe("old@example.com");
+  });
+
+  it("rejects a missing email field with 400", async () => {
+    const [user] = await db.insert(users).values({ provider: "google", providerId: "g-5", email: "old@example.com", name: "E" }).returning();
+    const { token } = await createSession(user.id);
+
+    const app = buildServer();
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/auth/email",
+      headers: { cookie: `oneabobeall_session=${token}` },
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+});
+
 describe("POST /auth/logout", () => {
   it("clears the session cookie and the sessions row", async () => {
     const [user] = await db.insert(users).values({ provider: "google", providerId: "g-2", email: "b@example.com", name: "B" }).returning();

@@ -203,7 +203,12 @@ export function registerGoogleAuthRoutes(app: FastifyInstance): void {
         path: "/",
       });
 
-      reply.redirect(`${PUBLIC_APP_URL}/account`);
+      // `?welcome=1` only on the account's very first sign-in (the `existing`
+      // lookup above came back empty) — AccountShell uses it to show a
+      // one-time "confirm your email" prompt right after signup, never on a
+      // later, ordinary sign-in.
+      const isNewUser = !existing;
+      reply.redirect(`${PUBLIC_APP_URL}/account${isNewUser ? "?welcome=1" : ""}`);
     } catch (err) {
       request.log.error({ err }, "Google OAuth callback: user/session creation failed");
       reply.redirect(SIGN_IN_FAILED_REDIRECT);

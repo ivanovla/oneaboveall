@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { getRoundParticipant } from "engine/db/repository";
+import { getRoundParticipant, getQueueLeader } from "engine/db/repository";
 import { requireSession } from "../auth/requireSession";
 
 // rounds.id is a Postgres `uuid` column, so querying it with a value that
@@ -29,6 +29,19 @@ export function registerRoundParticipationRoute(app: FastifyInstance): void {
     }
 
     const participant = await getRoundParticipant(roundId, user.id);
-    return { joined: !!participant };
+    if (!participant) {
+      return { joined: false };
+    }
+
+    // "Leading" answers whether the queue's current top bid is this user's
+    // own — not whether they've ever placed one. A participant who joined
+    // but never bid is correctly "not leading" (there's nothing to be
+    // outbid on yet), the same as one who bid and was overtaken.
+    const leader = await getQueueLeader(roundId);
+    return {
+      joined: true,
+      depositCents: participant.depositCents,
+      isLeading: leader?.bidderId === user.id,
+    };
   });
 }

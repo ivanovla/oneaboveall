@@ -194,7 +194,9 @@ describe("POST /auth/apple/callback", () => {
     });
 
     expect(response.statusCode).toBe(302);
-    expect(response.headers.location).toBe(process.env.PUBLIC_APP_URL + "/account");
+    // ?welcome=1 only on this account's very first sign-in — AccountShell
+    // uses it to show a one-time "confirm your email" prompt.
+    expect(response.headers.location).toBe(process.env.PUBLIC_APP_URL + "/account?welcome=1");
     const cookies = Array.isArray(response.headers["set-cookie"]) ? response.headers["set-cookie"] : [response.headers["set-cookie"]];
     expect(cookies.some((c) => c?.includes("oneabobeall_session="))).toBe(true);
     expect(getSetCookieHeader(response, OAUTH_STATE_COOKIE_NAME)).toMatch(/Expires=Thu, 01 Jan 1970/);
@@ -236,7 +238,7 @@ describe("POST /auth/apple/callback", () => {
     });
 
     expect(response.statusCode).toBe(302);
-    expect(response.headers.location).toBe(process.env.PUBLIC_APP_URL + "/account");
+    expect(response.headers.location).toBe(process.env.PUBLIC_APP_URL + "/account?welcome=1");
     expect(callback).toHaveBeenCalled();
 
     const [user] = await db.select().from(users).where(eq(users.provider, "apple"));

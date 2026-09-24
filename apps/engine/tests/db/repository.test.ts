@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, afterAll } from "vitest";
 import { db, pool } from "../../src/db/client";
 import { reigns, rounds, bids, bans, roundParticipants } from "../../src/db/schema";
-import { getCurrentReign, getLatestRound, getQueueLeader, isBanned, getRoundParticipant } from "../../src/db/repository";
+import { getCurrentReign, getLatestRound, getQueueLeader, getBidderTopBid, isBanned, getRoundParticipant } from "../../src/db/repository";
 
 afterEach(async () => {
   await db.delete(roundParticipants);
@@ -76,6 +76,29 @@ describe("getQueueLeader", () => {
 
     // A bid placed exactly at asOf is still inside the window.
     expect((await getQueueLeader(round.id, new Date(windowClose.getTime() + 1000)))?.bidderId).toBe("late");
+  });
+});
+
+describe("getBidderTopBid", () => {
+  it("returns null when this bidder never bid in the round", async () => {
+    const [reign] = await db.insert(reigns).values({ occupantId: "u1", priceCents: 10_000, startedAt: new Date() }).returning();
+    const [round] = await db.insert(rounds).values({ reignId: reign.id, startsAt: new Date() }).returning();
+    await db.insert(bids).values({ roundId: round.id, bidderId: "someone-else", amountCents: 11_000, placedAt: new Date() });
+
+    expect(await getBidderTopBid(round.id, "a")).toBeNull();
+  });
+
+  it("returns this bidder's own highest bid, ignoring other bidders' higher ones", async () => {
+    const [reign] = await db.insert(reigns).values({ occupantId: "u1", priceCents: 10_000, startedAt: new Date() }).returning();
+    const [round] = await db.insert(rounds).values({ reignId: reign.id, startsAt: new Date() }).returning();
+    await db.insert(bids).values([
+      { roundId: round.id, bidderId: "a", amountCents: 11_000, placedAt: new Date(2026, 0, 1, 10, 0, 0) },
+      { roundId: round.id, bidderId: "a", amountCents: 13_000, placedAt: new Date(2026, 0, 1, 10, 0, 5) },
+      { roundId: round.id, bidderId: "b", amountCents: 20_000, placedAt: new Date(2026, 0, 1, 10, 0, 1) },
+    ]);
+
+    const top = await getBidderTopBid(round.id, "a");
+    expect(top?.amountCents).toBe(13_000);
   });
 });
 

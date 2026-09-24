@@ -17,8 +17,9 @@ vi.mock("../src/auth/requireSession", () => ({
 // provide the module's full surface.
 vi.mock("engine/db/repository", () => ({
   getRoundParticipant: vi.fn(async (_roundId: string, bidderId: string) =>
-    bidderId === "bidder-1" ? { id: "p1", roundId: ROUND_ID, bidderId: "bidder-1" } : null,
+    bidderId === "bidder-1" ? { id: "p1", roundId: ROUND_ID, bidderId: "bidder-1", depositCents: 1_000 } : null,
   ),
+  getQueueLeader: vi.fn(async () => null),
   getCurrentReign: vi.fn(async () => null),
   getLatestRound: vi.fn(async () => null),
   isBanned: vi.fn(async () => false),
@@ -30,11 +31,29 @@ vi.mock("engine/db/repository", () => ({
 const { ROUND_ID } = vi.hoisted(() => ({ ROUND_ID: "11111111-1111-4111-8111-111111111111" }));
 
 describe("GET /rounds/:id/me", () => {
-  it("returns joined: true when the signed-in user has a participant row", async () => {
+  it("returns joined: true with the held deposit amount when the signed-in user has a participant row", async () => {
     const app = buildServer();
     const response = await app.inject({ method: "GET", url: `/rounds/${ROUND_ID}/me` });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ joined: true });
+    expect(response.json()).toEqual({ joined: true, depositCents: 1_000, isLeading: false });
+  });
+
+  it("reports isLeading: true when this user's own bid is the queue's current top bid", async () => {
+    const { getQueueLeader } = await import("engine/db/repository");
+    vi.mocked(getQueueLeader).mockResolvedValueOnce({ id: "b1", roundId: ROUND_ID, bidderId: "bidder-1", amountCents: 5_000, placedAt: new Date() } as any);
+
+    const app = buildServer();
+    const response = await app.inject({ method: "GET", url: `/rounds/${ROUND_ID}/me` });
+    expect(response.json()).toEqual({ joined: true, depositCents: 1_000, isLeading: true });
+  });
+
+  it("reports isLeading: false when someone else's bid is the queue's current top bid", async () => {
+    const { getQueueLeader } = await import("engine/db/repository");
+    vi.mocked(getQueueLeader).mockResolvedValueOnce({ id: "b1", roundId: ROUND_ID, bidderId: "someone-else", amountCents: 5_000, placedAt: new Date() } as any);
+
+    const app = buildServer();
+    const response = await app.inject({ method: "GET", url: `/rounds/${ROUND_ID}/me` });
+    expect(response.json()).toEqual({ joined: true, depositCents: 1_000, isLeading: false });
   });
 
   // The participant row for "bidder-1" still exists — this must report on the

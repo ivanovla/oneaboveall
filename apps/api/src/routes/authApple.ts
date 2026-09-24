@@ -184,6 +184,7 @@ export function registerAppleAuthRoutes(app: FastifyInstance): void {
           .where(and(eq(users.provider, "apple"), eq(users.providerId, claims.sub)))
           .limit(1);
 
+        const isNewUser = !existing;
         let user = existing;
         if (!user) {
           // Apple includes this JSON-encoded "user" field, carrying name
@@ -232,7 +233,10 @@ export function registerAppleAuthRoutes(app: FastifyInstance): void {
           path: "/",
         });
 
-        reply.redirect(`${PUBLIC_APP_URL}/account`);
+        // `?welcome=1` only on this account's very first sign-in — mirrors
+        // authGoogle.ts's equivalent flag, which AccountShell uses to show a
+        // one-time "confirm your email" prompt right after signup.
+        reply.redirect(`${PUBLIC_APP_URL}/account${isNewUser ? "?welcome=1" : ""}`);
       } catch (err) {
         request.log.error({ err }, "Apple OAuth callback: user/session creation failed");
         reply.redirect(SIGN_IN_FAILED_REDIRECT);

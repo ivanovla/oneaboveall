@@ -38,6 +38,19 @@ export async function getQueueLeader(roundId: string, asOf?: Date): Promise<Bid 
   return top ?? null;
 }
 
+// This bidder's own highest bid in the round, independent of who's
+// currently leading. Used to distinguish "never bid" from "bid but got
+// outbid" — getQueueLeader alone can't tell those apart.
+export async function getBidderTopBid(roundId: string, bidderId: string): Promise<Bid | null> {
+  const [top] = await db
+    .select()
+    .from(bids)
+    .where(and(eq(bids.roundId, roundId), eq(bids.bidderId, bidderId)))
+    .orderBy(desc(bids.amountCents), asc(bids.placedAt))
+    .limit(1);
+  return top ?? null;
+}
+
 export async function getRoundParticipant(roundId: string, bidderId: string): Promise<RoundParticipant | null> {
   const [row] = await db
     .select()
