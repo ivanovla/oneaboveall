@@ -11,6 +11,16 @@ type CurrentRoundInfo = {
   biddingClosesAt: string;
 } | null;
 
+// The fields beyond `joined` are only present once joined === true, and even
+// then only when the caller actually asked for them (the mocked-out `{joined:
+// true}` shape used by several tests omits them) — every read of them must
+// tolerate `undefined`.
+type Participation = {
+  joined: boolean;
+  depositCents?: number;
+  isLeading?: boolean;
+};
+
 const POLL_INTERVAL_MS = 5_000;
 
 const boxStyle: React.CSSProperties = {
@@ -259,6 +269,8 @@ function BidForm({ apiBaseUrl, currentLeaderCents }: { apiBaseUrl: string; curre
 export default function LiveAuction({ apiBaseUrl }: { apiBaseUrl: string }) {
   const [round, setRound] = useState<CurrentRoundInfo | "loading">("loading");
   const [joined, setJoined] = useState<boolean | null>(null);
+  const [myDepositCents, setMyDepositCents] = useState<number | null>(null);
+  const [isLeading, setIsLeading] = useState<boolean | null>(null);
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [joiningInFlight, setJoiningInFlight] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
@@ -283,11 +295,15 @@ export default function LiveAuction({ apiBaseUrl }: { apiBaseUrl: string }) {
         redirectToSignedOut();
         return;
       }
-      const meData = await meRes.json();
+      const meData: Participation = await meRes.json();
       setJoined(!!meData.joined);
+      setMyDepositCents(typeof meData.depositCents === "number" ? meData.depositCents : null);
+      setIsLeading(typeof meData.isLeading === "boolean" ? meData.isLeading : null);
     } else if (!data) {
       roundIdRef.current = null;
       setJoined(null);
+      setMyDepositCents(null);
+      setIsLeading(null);
     }
   }
 
@@ -394,10 +410,27 @@ export default function LiveAuction({ apiBaseUrl }: { apiBaseUrl: string }) {
 
   return (
     <div style={boxStyle}>
-      <div style={fieldLabelStyle}>Current leader</div>
-      <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: 28, marginTop: 6 }}>
-        {formatMoney(round.currentLeaderCents)}
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
+        <div>
+          <div style={fieldLabelStyle}>Current leader</div>
+          <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: 28, marginTop: 6 }}>
+            {formatMoney(round.currentLeaderCents)}
+          </div>
+        </div>
+        {myDepositCents !== null && (
+          <div style={{ textAlign: "right" }}>
+            <div style={fieldLabelStyle}>Your deposit held</div>
+            <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: 28, marginTop: 6 }}>
+              {formatMoney(myDepositCents)}
+            </div>
+          </div>
+        )}
       </div>
+      {isLeading !== null && (
+        <div style={{ marginTop: 10, fontSize: 12, color: isLeading ? "var(--gold)" : "var(--fg-dim)" }}>
+          {isLeading ? "You're currently leading." : "You're not the current leader."}
+        </div>
+      )}
       <BidForm apiBaseUrl={apiBaseUrl} currentLeaderCents={round.currentLeaderCents} />
     </div>
   );

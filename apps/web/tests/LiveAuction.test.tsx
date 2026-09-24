@@ -67,6 +67,25 @@ describe("LiveAuction", () => {
     await waitFor(() => expect(screen.getByLabelText(/your bid/i)).toBeInTheDocument());
   });
 
+  it("shows the held deposit and leading status once joined", async () => {
+    global.fetch = mockFetchSequence({
+      currentRound: { roundId: "round-1", phase: "bidding", currentLeaderCents: 100_000, depositCents: 10_000, biddingClosesAt: "2026-09-23T12:00:00.000Z" },
+      participation: { joined: true, depositCents: 10_000, isLeading: false },
+    }) as unknown as typeof fetch;
+    render(<LiveAuction apiBaseUrl="http://api.test" />);
+    await waitFor(() => expect(screen.getByText(/your deposit held/i)).toBeInTheDocument());
+    expect(screen.getByText(/not the current leader/i)).toBeInTheDocument();
+  });
+
+  it("shows a leading message when this user's own bid is the current top bid", async () => {
+    global.fetch = mockFetchSequence({
+      currentRound: { roundId: "round-1", phase: "bidding", currentLeaderCents: 100_000, depositCents: 10_000, biddingClosesAt: "2026-09-23T12:00:00.000Z" },
+      participation: { joined: true, depositCents: 10_000, isLeading: true },
+    }) as unknown as typeof fetch;
+    render(<LiveAuction apiBaseUrl="http://api.test" />);
+    await waitFor(() => expect(screen.getByText(/you're currently leading/i)).toBeInTheDocument());
+  });
+
   it("shows a null-round state when there's no active reign yet", async () => {
     global.fetch = vi.fn(async (url: string) => {
       if (new URL(url).pathname === "/current-round") return { ok: true, json: async () => null };
