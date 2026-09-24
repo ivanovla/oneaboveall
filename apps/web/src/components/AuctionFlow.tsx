@@ -1,55 +1,9 @@
 import { useEffect, useState } from "react";
-import { formatMoney, formatCountdown, calculateDepositDisplay } from "../lib/format";
-import {
-  mockCurrentPriceCents,
-  mockBiddingWindowClosesAt,
-  mockPaymentWindowClosesAt,
-  mockReferenceNow,
-  mockLeaderboard,
-} from "../lib/mockData";
+import { formatMoney, formatCountdown } from "../lib/format";
+import { mockCurrentPriceCents, mockBiddingWindowClosesAt, mockReferenceNow, mockLeaderboard } from "../lib/mockData";
 import type { LeaderboardRow } from "../lib/types";
 
-// A one-dollar step above the current price. Renders the "Minimum" figure on
-// the bid screen, seeds the input's prefilled value, and acts as the floor
-// every derived bid figure is clamped to. Purely cosmetic — there is no
-// server-side minimum bid concept in the data this component consumes.
-const MIN_BID_INCREMENT_CENTS = 100;
-
-/**
- * Turns the raw, unsanitised string the user typed into a usable cents figure.
- *
- * Mirrors the prototype's
- *   `Math.max(s.current + 1, Number(String(s.bid).replace(/[^\d]/g, "")) || 0)`
- * (design/prototype/one-above-all.dc.html ~line 316), adapted to this app's
- * "dollars in the input, converted to cents exactly once" convention.
- *
- * The input sits directly beneath a comma-formatted "$4,210", so typing
- * "4,300" is the natural thing to do — without stripping separators that fed
- * `Number("4,300") === NaN` straight into four downstream screens as "$NaN".
- * Every non-digit is dropped (commas, spaces, "$", stray letters), an empty
- * or unparseable result falls back to 0, and the figure is finally floored at
- * `minBidCents` so no screen can ever display a bid below what it takes to
- * displace the champion.
- */
-function parseBidCents(rawValue: string, minBidCents: number): number {
-  const digits = rawValue.replace(/[^\d]/g, "");
-  const dollars = digits === "" ? 0 : Number(digits);
-  // A long enough run of digits overflows to Infinity; treat that (and any
-  // other non-finite result) the same as "nothing usable was typed".
-  const cents = Number.isFinite(dollars) ? dollars * 100 : 0;
-  return Math.max(minBidCents, cents);
-}
-
-type Screen =
-  | "closed"
-  | "auth"
-  | "bid"
-  | "lead"
-  | "pay"
-  | "upload"
-  | "pending"
-  | "missed"
-  | "top";
+type Screen = "closed" | "auth" | "top";
 
 /**
  * Renders `closesAt` as a live HH:MM:SS countdown.
@@ -75,6 +29,13 @@ type Screen =
  *    prototype's own behaviour exactly (it seeds `left` with a literal
  *    6h41m12s and decrements it once a second) while keeping `closesAt`
  *    modelled the way a real API would hand it over — as a timestamp.
+ *
+ *    KNOWN GAP — deliberate, tracked. The API exposes only `getScene` /
+ *    `getLeaderboard`; there is no round state fetch on the public homepage,
+ *    so this countdown is still a demo figure rather than a real bidding
+ *    window close time. The real bidding/deposit flow lives at
+ *    /account/auction (LiveAuction.tsx), which polls the real
+ *    `GET /current-round` for a real `biddingClosesAt`.
  *
  * The ticking is driven by elapsed real time since mount rather than by
  * counting interval fires, so a throttled background tab resumes at the right
@@ -127,11 +88,6 @@ const overlayBodyStyle: React.CSSProperties = {
   padding: "28px 26px 30px",
 };
 
-// One heading style for every overlay screen (auth/bid/lead/pay/upload/
-// pending/missed). The prototype itself drifted between 34px/1.08, 36px/1.06
-// and 34px/1.1 across those seven screens; 36px/1.06 is the value its three
-// most recent screens (lead/pay/upload) settled on, so it wins here rather
-// than the three ad-hoc sizes this file had grown.
 const headingStyle: React.CSSProperties = {
   fontFamily: "'Cormorant Garamond', Georgia, serif",
   fontSize: 36,
@@ -149,32 +105,6 @@ const chromeButtonStyle: React.CSSProperties = {
   border: "1px solid var(--line)",
   background: "var(--scene-chip)",
   backdropFilter: "blur(8px)",
-};
-
-const fieldLabelStyle: React.CSSProperties = {
-  fontSize: 9,
-  letterSpacing: ".16em",
-  textTransform: "uppercase",
-  color: "var(--fg-faint)",
-};
-
-const boxStyle: React.CSSProperties = {
-  flex: 1,
-  padding: "15px 16px",
-  border: "1px solid var(--line)",
-  background: "var(--panel-2)",
-};
-
-const primaryButtonStyle: React.CSSProperties = {
-  width: "100%",
-  marginTop: 24,
-  padding: 18,
-  background: "var(--gold)",
-  color: "var(--btn-fg)",
-  fontSize: 12,
-  fontWeight: 600,
-  letterSpacing: ".34em",
-  textTransform: "uppercase",
 };
 
 // Keep in sync with the pre-paint theme script in layouts/BaseLayout.astro,
@@ -259,6 +189,19 @@ function OverlayShell({
   );
 }
 
+const signInLinkStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 10,
+  padding: 16,
+  border: "1px solid var(--line)",
+  background: "var(--panel-2)",
+  fontSize: 13,
+  letterSpacing: ".04em",
+  color: "var(--fg)",
+};
+
 export default function AuctionFlow({
   initialScreen = "closed",
   leaderboard = mockLeaderboard,
@@ -269,50 +212,21 @@ export default function AuctionFlow({
   // Defaults to the mock constant so this component still renders standalone
   // (tests, any caller with no live data) exactly as it did before.
   currentPriceCents = mockCurrentPriceCents,
+  // Base URL of the live API — "Continue with Google/Apple" below are real,
+  // top-level-navigation links into it (GET /auth/google, GET /auth/apple),
+  // not client-side calls, so the browser follows the provider's redirect
+  // chain and lands back on /account (see authGoogle.ts/authApple.ts).
+  apiBaseUrl = "http://127.0.0.1:3001",
 }: {
   initialScreen?: Screen;
   leaderboard?: LeaderboardRow[];
   currentPriceCents?: number;
+  apiBaseUrl?: string;
 } = {}) {
-  const minBidCents = currentPriceCents + MIN_BID_INCREMENT_CENTS;
-
   const [screen, setScreen] = useState<Screen>(initialScreen);
-  // The raw string shown in the bid input on first paint: one increment above
-  // the current price (with the mock price, the prototype's `bid: 4211`).
-  // Derived purely from props, so the server-rendered HTML and the browser's
-  // first hydration render agree — see useCountdown's note on `client:idle`.
-  const [bidValue, setBidValue] = useState(() => String(Math.round(minBidCents / 100)));
-  const [consent, setConsent] = useState(false);
   const theme = useThemeToggle();
-
-  // KNOWN GAP — deliberate, tracked. Unlike the price and the leaderboard,
-  // both countdowns are still driven by mock constants frozen at
-  // `mockReferenceNow`, even when everything else on the page is live. The
-  // API exposes only `getScene` / `getLeaderboard`; there is no round or
-  // offer state on it yet, so the real "bidding window closes at" and
-  // "payment window closes at" instants simply aren't available to fetch.
-  // Closing this needs a round-state API surface first, at which point these
-  // become props threaded from index.astro the same way `currentPriceCents`
-  // and `leaderboard` are. Until then the countdowns are demo figures, and
-  // the whole bid/pay flow below them is still a non-transacting mock.
   const clock = useCountdown(mockBiddingWindowClosesAt);
-  const payClock = useCountdown(mockPaymentWindowClosesAt);
-
   const priceLabel = formatMoney(currentPriceCents);
-  const minBidLabel = formatMoney(minBidCents);
-
-  // `bidValue` is the raw string the user typed, and stays that way — the
-  // <input> below shows it back verbatim, separators and all. Every *derived*
-  // figure goes through `parseBidCents` instead, which sanitises and floors
-  // it, so the deposit / lead / pay / missed screens can never render "$NaN"
-  // or a sub-minimum bid no matter what was typed. Cents conversion happens
-  // exactly once, here; every downstream computation works in cents.
-  const bidCents = parseBidCents(bidValue, minBidCents);
-  const depositCents = calculateDepositDisplay(bidCents);
-  // Same bidCents/depositCents carried over from the bid screen — no re-parsing.
-  const remainderCents = bidCents - depositCents;
-
-  const payProviderLabel = "Stripe · charged in US dollars";
 
   function closeOverlay() {
     setScreen("closed");
@@ -410,449 +324,22 @@ export default function AuctionFlow({
       </div>
 
       {screen === "auth" && (
-        <OverlayShell stepLabel="Step 1 · Sign in" onClose={closeOverlay}>
+        <OverlayShell stepLabel="Sign in" onClose={closeOverlay}>
           <div style={headingStyle}>Sign in to claim the seat</div>
           <div style={{ marginTop: 10, fontSize: 13, lineHeight: 1.6, color: "var(--fg-dim)" }}>
             One account, one bid per round.
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 9, marginTop: 24 }}>
-            <button
-              onClick={() => setScreen("bid")}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 10,
-                padding: 16,
-                border: "1px solid var(--line)",
-                background: "var(--panel-2)",
-                fontSize: 13,
-                letterSpacing: ".04em",
-              }}
-            >
+            <a href={`${apiBaseUrl}/auth/google`} style={signInLinkStyle}>
               Continue with Google
-            </button>
-            <button
-              onClick={() => setScreen("bid")}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 10,
-                padding: 16,
-                border: "1px solid var(--line)",
-                background: "var(--panel-2)",
-                fontSize: 13,
-                letterSpacing: ".04em",
-              }}
-            >
+            </a>
+            <a href={`${apiBaseUrl}/auth/apple`} style={signInLinkStyle}>
               Continue with Apple
-            </button>
+            </a>
           </div>
           <div style={{ marginTop: 18, fontSize: 11, lineHeight: 1.6, color: "var(--fg-faint)" }}>
             Terms of participation and deposit rules are on the rules page.
           </div>
-        </OverlayShell>
-      )}
-
-      {screen === "bid" && (
-        <OverlayShell stepLabel="Step 2 · Bid" onClose={closeOverlay}>
-          <div style={headingStyle}>Your bid</div>
-          <div style={{ display: "flex", gap: 14, marginTop: 22 }}>
-            <div style={boxStyle}>
-              <div style={fieldLabelStyle}>Must beat</div>
-              <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: 28, marginTop: 5 }}>
-                {priceLabel}
-              </div>
-            </div>
-            <div style={boxStyle}>
-              <div style={fieldLabelStyle}>Minimum</div>
-              <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: 28, marginTop: 5 }}>
-                {minBidLabel}
-              </div>
-            </div>
-          </div>
-          <div style={{ marginTop: 20 }}>
-            <label htmlFor="auction-flow-bid" style={fieldLabelStyle}>
-              Your bid, $
-            </label>
-            <input
-              id="auction-flow-bid"
-              type="text"
-              value={bidValue}
-              onChange={(e) => setBidValue(e.target.value)}
-              style={{
-                display: "block",
-                width: "100%",
-                marginTop: 8,
-                padding: "16px 18px",
-                background: "transparent",
-                border: "1px solid var(--gold-soft)",
-                color: "var(--fg)",
-                fontFamily: "'Cormorant Garamond', Georgia, serif",
-                fontSize: 34,
-                letterSpacing: ".01em",
-                outline: "none",
-              }}
-            />
-          </div>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "baseline",
-              gap: 12,
-              marginTop: 20,
-              padding: "16px 18px",
-              border: "1px solid var(--line)",
-              background: "var(--panel-2)",
-            }}
-          >
-            <div>
-              <div style={{ fontSize: 13 }}>Deposit charged now</div>
-              <div style={{ marginTop: 4, fontSize: 11, color: "var(--fg-dim)" }}>
-                10% of the bid, min $1, capped at $10,000
-              </div>
-            </div>
-            <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: 30, whiteSpace: "nowrap" }}>
-              {formatMoney(depositCents)}
-            </div>
-          </div>
-          <button onClick={() => setScreen("lead")} style={primaryButtonStyle}>
-            Place deposit
-          </button>
-          <div style={{ marginTop: 14, textAlign: "center", fontSize: 12, color: "var(--fg-dim)" }}>
-            Bidding window:{" "}
-            <span style={{ color: "var(--fg)", fontVariantNumeric: "tabular-nums" }}>{clock}</span>
-          </div>
-        </OverlayShell>
-      )}
-
-      {screen === "lead" && (
-        <OverlayShell stepLabel="Step 3 · Queue" onClose={closeOverlay}>
-          <div
-            style={{
-              fontSize: 9,
-              letterSpacing: ".28em",
-              textTransform: "uppercase",
-              color: "var(--gold)",
-            }}
-          >
-            You're first in line
-          </div>
-          <div style={{ ...headingStyle, marginTop: 12 }}>
-            Bid {formatMoney(bidCents)} accepted
-          </div>
-          <div style={{ marginTop: 12, fontSize: 13, lineHeight: 1.65, color: "var(--fg-dim)" }}>
-            The seat is yours if no one outbids you before the window closes.
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 22 }}>
-            <div style={boxStyle}>
-              <div style={fieldLabelStyle}>Deposit held</div>
-              <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: 26, marginTop: 5 }}>
-                {formatMoney(depositCents)}
-              </div>
-            </div>
-            <div style={boxStyle}>
-              <div style={fieldLabelStyle}>Until snapshot</div>
-              <div
-                style={{
-                  fontFamily: "'Cormorant Garamond', Georgia, serif",
-                  fontSize: 26,
-                  marginTop: 5,
-                  fontVariantNumeric: "tabular-nums",
-                }}
-              >
-                {clock}
-              </div>
-            </div>
-          </div>
-          <button
-            onClick={() => setScreen("pay")}
-            style={{
-              width: "100%",
-              marginTop: 22,
-              padding: 16,
-              border: "1px solid var(--gold-soft)",
-              fontSize: 12,
-              letterSpacing: ".28em",
-              textTransform: "uppercase",
-              color: "var(--gold)",
-            }}
-          >
-            Round closed — continue
-          </button>
-        </OverlayShell>
-      )}
-
-      {screen === "pay" && (
-        <OverlayShell stepLabel="Step 4 · Balance" onClose={closeOverlay}>
-          <div
-            style={{
-              fontSize: 9,
-              letterSpacing: ".28em",
-              textTransform: "uppercase",
-              color: "var(--gold)",
-            }}
-          >
-            You won the round
-          </div>
-          <div style={{ ...headingStyle, marginTop: 12 }}>Remaining balance due</div>
-          <div style={{ marginTop: 26, textAlign: "center" }}>
-            <div
-              style={{
-                fontFamily: "'Cormorant Garamond', Georgia, serif",
-                fontSize: 64,
-                lineHeight: 1,
-                letterSpacing: "-.02em",
-              }}
-            >
-              {formatMoney(remainderCents)}
-            </div>
-            <div style={{ marginTop: 8, fontSize: 12, color: "var(--fg-dim)" }}>
-              Bid {formatMoney(bidCents)} minus deposit {formatMoney(depositCents)}
-            </div>
-          </div>
-          <div
-            style={{
-              marginTop: 26,
-              padding: 20,
-              border: "1px solid var(--gold-soft)",
-              textAlign: "center",
-              background: "var(--panel-2)",
-            }}
-          >
-            <div style={{ fontSize: 9, letterSpacing: ".2em", textTransform: "uppercase", color: "var(--fg-faint)" }}>
-              Payment window closes in
-            </div>
-            <div
-              style={{
-                fontFamily: "'Cormorant Garamond', Georgia, serif",
-                fontSize: 52,
-                lineHeight: 1.05,
-                marginTop: 6,
-                fontVariantNumeric: "tabular-nums",
-                color: "var(--gold)",
-              }}
-            >
-              {payClock}
-            </div>
-          </div>
-          <button onClick={() => setScreen("upload")} style={primaryButtonStyle}>
-            Pay {formatMoney(remainderCents)}
-          </button>
-          <div style={{ marginTop: 13, textAlign: "center", fontSize: 11, color: "var(--fg-faint)" }}>
-            {payProviderLabel}
-          </div>
-        </OverlayShell>
-      )}
-
-      {screen === "upload" && (
-        <OverlayShell stepLabel="Step 5 · Photo" onClose={closeOverlay}>
-          <div
-            style={{
-              fontSize: 9,
-              letterSpacing: ".28em",
-              textTransform: "uppercase",
-              color: "var(--gold)",
-            }}
-          >
-            Paid
-          </div>
-          <div style={{ ...headingStyle, marginTop: 12 }}>Send your face</div>
-          <div style={{ marginTop: 11, fontSize: 13, lineHeight: 1.65, color: "var(--fg-dim)" }}>
-            Front-facing photo, full face, no glasses or headwear.
-          </div>
-          <div
-            style={{
-              marginTop: 22,
-              aspectRatio: "4 / 3",
-              border: "1px dashed var(--gold-soft)",
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 10,
-              background: "var(--panel-2)",
-            }}
-          >
-            <div
-              style={{
-                fontFamily: "ui-monospace, Menlo, monospace",
-                fontSize: 11,
-                letterSpacing: ".12em",
-                color: "var(--fg-faint)",
-              }}
-            >
-              selfie · jpg / png · up to 12 MB
-            </div>
-            <button
-              style={{
-                padding: "12px 26px",
-                border: "1px solid var(--gold-soft)",
-                fontSize: 11,
-                letterSpacing: ".22em",
-                textTransform: "uppercase",
-                color: "var(--gold)",
-              }}
-            >
-              Choose file
-            </button>
-          </div>
-          <button
-            onClick={() => setConsent((c) => !c)}
-            style={{
-              display: "flex",
-              gap: 12,
-              alignItems: "flex-start",
-              textAlign: "left",
-              marginTop: 20,
-              padding: "14px 15px",
-              border: "1px solid var(--line)",
-              width: "100%",
-              background: "var(--panel-2)",
-            }}
-          >
-            <span
-              style={{
-                flex: "0 0 18px",
-                width: 18,
-                height: 18,
-                border: "1px solid var(--gold)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: 11,
-                color: "var(--btn-fg)",
-                background: consent ? "var(--gold)" : "transparent",
-              }}
-            >
-              {consent ? "✓" : ""}
-            </span>
-            <span style={{ fontSize: 12, lineHeight: 1.55, color: "var(--fg-dim)" }}>
-              I agree to have my photo published on the homepage and in the champions archive.
-            </span>
-          </button>
-          <button
-            onClick={() => setScreen("pending")}
-            disabled={!consent}
-            style={{
-              width: "100%",
-              marginTop: 20,
-              padding: 18,
-              background: "var(--gold)",
-              color: "var(--btn-fg)",
-              fontSize: 12,
-              fontWeight: 600,
-              letterSpacing: ".34em",
-              textTransform: "uppercase",
-              opacity: consent ? 1 : 0.34,
-              cursor: consent ? "pointer" : "not-allowed",
-            }}
-          >
-            Submit
-          </button>
-        </OverlayShell>
-      )}
-
-      {screen === "pending" && (
-        <OverlayShell stepLabel="Step 6 · Waiting" onClose={closeOverlay}>
-          <div style={{ padding: "24px 0 20px", textAlign: "center" }}>
-            <div
-              style={{
-                width: 9,
-                height: 9,
-                borderRadius: "50%",
-                background: "var(--gold)",
-                margin: "0 auto",
-                animation: "breathe 2.2s infinite",
-              }}
-            />
-            <div style={{ ...headingStyle, marginTop: 22 }}>The scene is updating</div>
-            <div style={{ marginTop: 12, fontSize: 13, lineHeight: 1.7, color: "var(--fg-dim)" }}>
-              The shot is being re-composed with you at the center. Usually takes a few minutes — feel
-              free to close this page, we'll notify you.
-            </div>
-            <button
-              onClick={closeOverlay}
-              style={{
-                marginTop: 26,
-                padding: "15px 34px",
-                border: "1px solid var(--gold-soft)",
-                fontSize: 11,
-                letterSpacing: ".26em",
-                textTransform: "uppercase",
-                color: "var(--gold)",
-              }}
-            >
-              Back to the scene
-            </button>
-          </div>
-        </OverlayShell>
-      )}
-
-      {screen === "missed" && (
-        <OverlayShell stepLabel="Round missed" onClose={closeOverlay}>
-          <div
-            style={{
-              fontSize: 9,
-              letterSpacing: ".28em",
-              textTransform: "uppercase",
-              color: "var(--fg-faint)",
-            }}
-          >
-            Payment window closed
-          </div>
-          <div style={{ ...headingStyle, marginTop: 12 }}>
-            The seat moved to the next in line
-          </div>
-          <div style={{ marginTop: 12, fontSize: 13, lineHeight: 1.7, color: "var(--fg-dim)" }}>
-            The remaining balance didn't arrive before the daily window closed, so the offer passed to
-            the second in queue.
-          </div>
-          <div style={{ marginTop: 22, border: "1px solid var(--line)" }}>
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                padding: "14px 16px",
-                borderBottom: "1px solid var(--line)",
-                fontSize: 13,
-              }}
-            >
-              <span style={{ color: "var(--fg-dim)" }}>Deposit</span>
-              <span>{formatMoney(depositCents)} forfeited</span>
-            </div>
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                padding: "14px 16px",
-                fontSize: 13,
-              }}
-            >
-              <span style={{ color: "var(--fg-dim)" }}>Participation</span>
-              <span>3-round pause</span>
-            </div>
-          </div>
-          <div style={{ marginTop: 16, fontSize: 12, lineHeight: 1.6, color: "var(--fg-faint)" }}>
-            Next eligible bid: August 14. If your payment was delayed, reach out and we'll sort it out.
-          </div>
-          <button
-            onClick={closeOverlay}
-            style={{
-              width: "100%",
-              marginTop: 22,
-              padding: 16,
-              border: "1px solid var(--line)",
-              fontSize: 11,
-              letterSpacing: ".26em",
-              textTransform: "uppercase",
-              color: "var(--fg-dim)",
-            }}
-          >
-            Back to the scene
-          </button>
         </OverlayShell>
       )}
 

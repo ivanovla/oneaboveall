@@ -2,6 +2,7 @@
 import BaseLayout from "../layouts/BaseLayout.astro";
 import Scene from "../components/Scene.astro";
 import AuctionFlow from "../components/AuctionFlow";
+import UserBadge from "../components/UserBadge";
 import { adaptScene, adaptLeaderboardRow } from "../lib/sceneAdapter";
 import { mockScene, mockLeaderboard, mockReferenceNow } from "../lib/mockData";
 import type { Scene as SceneData, LeaderboardRow } from "../lib/types";
@@ -134,5 +135,12 @@ const referenceNow: Date = live?.referenceNow ?? mockReferenceNow;
     client:idle
     leaderboard={leaderboard}
     currentPriceCents={scene.champion.priceCents}
+    apiBaseUrl={apiBaseUrl}
   />
+  <!--
+    The one deliberate live element on this otherwise fully static page: a
+    small session-aware badge, gone entirely when signed out. See
+    UserBadge.tsx's own header comment.
+  -->
+  <UserBadge client:load apiBaseUrl={apiBaseUrl} />
 </BaseLayout>
