@@ -2,7 +2,6 @@
 import BaseLayout from "../layouts/BaseLayout.astro";
 import Scene from "../components/Scene.astro";
 import AuctionFlow from "../components/AuctionFlow";
-import UserBadge from "../components/UserBadge";
 import { adaptScene, adaptLeaderboardRow } from "../lib/sceneAdapter";
 import { mockScene, mockLeaderboard, mockReferenceNow } from "../lib/mockData";
 import type { Scene as SceneData, LeaderboardRow } from "../lib/types";
@@ -131,16 +130,17 @@ const referenceNow: Date = live?.referenceNow ?? mockReferenceNow;
     Displace button is by construction the same figure the Scene tooltip
     shows for the champion directly above it.
   -->
+  <!--
+    AuctionFlow now also renders the account badge (the one deliberate live
+    element on this otherwise fully static page — see UserBadge.tsx's own
+    header comment) inside its own top-right chrome row, so the badge sits
+    flush with the Light/Leaderboard chips instead of needing independent
+    fixed-position math to line up with them.
+  -->
   <AuctionFlow
     client:idle
     leaderboard={leaderboard}
     currentPriceCents={scene.champion.priceCents}
     apiBaseUrl={apiBaseUrl}
   />
-  <!--
-    The one deliberate live element on this otherwise fully static page: a
-    small session-aware badge, gone entirely when signed out. See
-    UserBadge.tsx's own header comment.
-  -->
-  <UserBadge client:load apiBaseUrl={apiBaseUrl} />
 </BaseLayout>

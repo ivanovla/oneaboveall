@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { formatMoney, formatCountdown } from "../lib/format";
 import { mockCurrentPriceCents, mockBiddingWindowClosesAt, mockReferenceNow, mockLeaderboard } from "../lib/mockData";
 import type { LeaderboardRow } from "../lib/types";
+import UserBadge from "./UserBadge";
 
 type Screen = "closed" | "auth" | "top";
 
@@ -281,6 +282,7 @@ export default function AuctionFlow({
         <button onClick={() => setScreen("top")} style={chromeButtonStyle}>
           Leaderboard
         </button>
+        <UserBadge apiBaseUrl={apiBaseUrl} />
       </div>
       <div
         style={{
