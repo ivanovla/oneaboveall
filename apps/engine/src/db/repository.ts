@@ -60,6 +60,48 @@ export async function getRoundParticipant(roundId: string, bidderId: string): Pr
   return row ?? null;
 }
 
+export type BidderHistoryEntry = {
+  roundId: string;
+  depositCents: number;
+  depositStatus: RoundParticipant["depositStatus"];
+  joinedAt: Date;
+  bids: { amountCents: number; placedAt: Date }[];
+};
+
+// Every round this bidder ever joined, most recent first, each with their
+// own bids in that round (not the round's overall leader — this is a
+// personal activity history, not a leaderboard). `depositStatus` alone
+// tells the outcome: "applied" won, "refunded" lost fairly, "forfeited"
+// won but failed to pay the remainder, "held" still in progress.
+//
+// One query per round rather than a single joined query — deliberately:
+// a bidder's total round count is small (rounds are ~daily), so the join's
+// added complexity isn't worth it for what stays a handful of round-trips.
+export async function getBidderHistory(bidderId: string): Promise<BidderHistoryEntry[]> {
+  const participantRows = await db
+    .select()
+    .from(roundParticipants)
+    .where(eq(roundParticipants.bidderId, bidderId))
+    .orderBy(desc(roundParticipants.joinedAt));
+
+  const entries: BidderHistoryEntry[] = [];
+  for (const row of participantRows) {
+    const bidRows = await db
+      .select({ amountCents: bids.amountCents, placedAt: bids.placedAt })
+      .from(bids)
+      .where(and(eq(bids.roundId, row.roundId), eq(bids.bidderId, bidderId)))
+      .orderBy(desc(bids.placedAt));
+    entries.push({
+      roundId: row.roundId,
+      depositCents: row.depositCents,
+      depositStatus: row.depositStatus,
+      joinedAt: row.joinedAt,
+      bids: bidRows,
+    });
+  }
+  return entries;
+}
+
 export async function isBanned(bidderId: string, now: Date): Promise<boolean> {
   const [row] = await db
     .select()

@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, afterAll } from "vitest";
 import { db, pool } from "../../src/db/client";
 import { reigns, rounds, bids, bans, roundParticipants } from "../../src/db/schema";
-import { getCurrentReign, getLatestRound, getQueueLeader, getBidderTopBid, isBanned, getRoundParticipant } from "../../src/db/repository";
+import { getCurrentReign, getLatestRound, getQueueLeader, getBidderTopBid, isBanned, getRoundParticipant, getBidderHistory } from "../../src/db/repository";
 
 afterEach(async () => {
   await db.delete(roundParticipants);
@@ -99,6 +99,54 @@ describe("getBidderTopBid", () => {
 
     const top = await getBidderTopBid(round.id, "a");
     expect(top?.amountCents).toBe(13_000);
+  });
+});
+
+describe("getBidderHistory", () => {
+  it("returns an empty list for a bidder who never joined anything", async () => {
+    expect(await getBidderHistory("nobody")).toEqual([]);
+  });
+
+  it("includes this bidder's own deposit and bids, most recent round first", async () => {
+    const [reign] = await db.insert(reigns).values({ occupantId: "champ", priceCents: 10_000, startedAt: new Date(2026, 0, 1) }).returning();
+    const [roundA] = await db.insert(rounds).values({ reignId: reign.id, startsAt: new Date(2026, 0, 1) }).returning();
+    const [roundB] = await db.insert(rounds).values({ reignId: reign.id, startsAt: new Date(2026, 0, 2) }).returning();
+
+    await db.insert(roundParticipants).values([
+      { roundId: roundA.id, bidderId: "a", depositCents: 1_000, depositRef: "pi_a", paymentMethodRef: "pm_a", customerRef: "cus_a", depositStatus: "refunded", joinedAt: new Date(2026, 0, 1, 10) },
+      { roundId: roundB.id, bidderId: "a", depositCents: 1_000, depositRef: "pi_b", paymentMethodRef: "pm_b", customerRef: "cus_b", depositStatus: "applied", joinedAt: new Date(2026, 0, 2, 10) },
+    ]);
+    await db.insert(bids).values([
+      { roundId: roundA.id, bidderId: "a", amountCents: 11_000, placedAt: new Date(2026, 0, 1, 11) },
+      { roundId: roundA.id, bidderId: "a", amountCents: 12_000, placedAt: new Date(2026, 0, 1, 12) },
+      // A different bidder's bid in the same round must never leak into "a"'s history.
+      { roundId: roundA.id, bidderId: "someone-else", amountCents: 13_000, placedAt: new Date(2026, 0, 1, 13) },
+      { roundId: roundB.id, bidderId: "a", amountCents: 15_000, placedAt: new Date(2026, 0, 2, 11) },
+    ]);
+
+    const history = await getBidderHistory("a");
+
+    expect(history).toHaveLength(2);
+    // Most recently joined round first.
+    expect(history[0]).toMatchObject({ roundId: roundB.id, depositCents: 1_000, depositStatus: "applied" });
+    expect(history[0].bids).toEqual([{ amountCents: 15_000, placedAt: new Date(2026, 0, 2, 11) }]);
+    expect(history[1]).toMatchObject({ roundId: roundA.id, depositCents: 1_000, depositStatus: "refunded" });
+    // This bidder's own two bids, most recent first — the other bidder's
+    // higher bid in the same round is excluded.
+    expect(history[1].bids).toEqual([
+      { amountCents: 12_000, placedAt: new Date(2026, 0, 1, 12) },
+      { amountCents: 11_000, placedAt: new Date(2026, 0, 1, 11) },
+    ]);
+  });
+
+  it("includes a round joined but never bid on, with an empty bids list", async () => {
+    const [reign] = await db.insert(reigns).values({ occupantId: "champ", priceCents: 10_000, startedAt: new Date() }).returning();
+    const [round] = await db.insert(rounds).values({ reignId: reign.id, startsAt: new Date() }).returning();
+    await db.insert(roundParticipants).values({ roundId: round.id, bidderId: "a", depositCents: 1_000, depositRef: "pi_a", paymentMethodRef: "pm_a", customerRef: "cus_a" });
+
+    const history = await getBidderHistory("a");
+    expect(history).toHaveLength(1);
+    expect(history[0].bids).toEqual([]);
   });
 });
 

@@ -16,6 +16,7 @@ import { registerGoogleAuthRoutes } from "./routes/authGoogle";
 import { registerAppleAuthRoutes } from "./routes/authApple";
 import { registerAuthMeRoutes } from "./routes/authMe";
 import { registerPhotoRoutes } from "./routes/photo";
+import { registerHistoryRoute } from "./routes/history";
 import { stripe, STRIPE_CURRENCY, STRIPE_WEBHOOK_SECRET } from "./stripeClient";
 import { StripePaymentProvider } from "./payments/StripePaymentProvider";
 
@@ -155,6 +156,7 @@ export function buildServer(): FastifyInstance {
   registerAppleAuthRoutes(app);
   registerAuthMeRoutes(app);
   registerPhotoRoutes(app);
+  registerHistoryRoute(app);
 
   return app;
 }
