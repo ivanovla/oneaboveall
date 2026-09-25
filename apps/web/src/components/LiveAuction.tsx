@@ -1,7 +1,55 @@
 import { useEffect, useRef, useState } from "react";
-import { loadStripe, type Stripe as StripeClient } from "@stripe/stripe-js";
+import { loadStripe, type Stripe as StripeClient, type Appearance } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { formatMoney } from "../lib/format";
+
+// Mirrors tokens.css's dark-theme palette (the account pages don't expose
+// the homepage's light/dark toggle, so they always render dark). Stripe's
+// Appearance API needs literal color values, not CSS custom properties, so
+// these are copied rather than read from the stylesheet — keep them in sync
+// with tokens.css's `:root` block by hand if that palette ever changes.
+const stripeAppearance: Appearance = {
+  theme: "night",
+  variables: {
+    colorPrimary: "#c9a45c", // --gold
+    colorBackground: "#15110a", // opaque stand-in for --panel-2 over --void
+    colorText: "#f0e7d6", // --fg
+    colorTextSecondary: "rgba(240, 231, 214, .56)", // --fg-dim
+    colorTextPlaceholder: "rgba(240, 231, 214, .3)", // --fg-faint
+    colorDanger: "#e0483e",
+    fontFamily: "Manrope, Helvetica, Arial, sans-serif",
+    fontSizeBase: "14px",
+    borderRadius: "0px", // this design never rounds a corner
+    spacingUnit: "4px",
+  },
+  rules: {
+    ".Label": {
+      fontSize: "9px",
+      letterSpacing: ".16em",
+      textTransform: "uppercase",
+      color: "rgba(240, 231, 214, .3)",
+    },
+    ".Input": {
+      border: "1px solid rgba(201, 164, 92, .34)", // --gold-soft
+      boxShadow: "none",
+    },
+    ".Input:focus": {
+      border: "1px solid #c9a45c",
+      boxShadow: "none",
+    },
+    ".Tab": {
+      border: "1px solid rgba(201, 164, 92, .22)", // --line
+      boxShadow: "none",
+    },
+    ".Tab:hover": {
+      border: "1px solid rgba(201, 164, 92, .34)",
+    },
+    ".Tab--selected": {
+      border: "1px solid #c9a45c",
+      boxShadow: "none",
+    },
+  },
+};
 
 type CurrentRoundInfo = {
   roundId: string;
@@ -393,7 +441,7 @@ export default function LiveAuction({ apiBaseUrl }: { apiBaseUrl: string }) {
           {formatMoney(round.depositCents)}
         </div>
         {clientSecret ? (
-          <Elements stripe={getStripe()} options={{ clientSecret }}>
+          <Elements stripe={getStripe()} options={{ clientSecret, appearance: stripeAppearance }}>
             <JoinPaymentForm apiBaseUrl={apiBaseUrl} roundId={round.roundId} onJoined={() => setJoined(true)} />
           </Elements>
         ) : (
