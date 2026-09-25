@@ -1,6 +1,15 @@
-import { describe, it, expect, afterEach, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import AuctionFlow from "../src/components/AuctionFlow";
+
+// AuctionFlow checks /auth/me on mount (to route an already-signed-in
+// Displace click straight to /account/auction) — real Node fetch is global
+// even under jsdom, so without a mock every test would fire a real network
+// request. Defaults to signed-out (401), matching the common case; tests
+// exercising the signed-in path override this per-test.
+beforeEach(() => {
+  global.fetch = vi.fn(async () => ({ ok: false, status: 401 })) as unknown as typeof fetch;
+});
 
 describe("AuctionFlow", () => {
   it("shows the current price and Displace button on the closed screen", () => {
@@ -58,6 +67,46 @@ describe("AuctionFlow", () => {
     render(<AuctionFlow />);
     fireEvent.click(screen.getByText("Displace"));
     expect(screen.getByText("Continue with Google")).toHaveAttribute("href", "http://127.0.0.1:3001/auth/google");
+  });
+});
+
+describe("AuctionFlow — already signed in", () => {
+  const originalLocation = window.location;
+
+  beforeEach(() => {
+    // @ts-expect-error test override
+    delete window.location;
+    // @ts-expect-error test override
+    window.location = { href: "" };
+  });
+
+  afterEach(() => {
+    // @ts-expect-error test override
+    window.location = originalLocation;
+  });
+
+  it("sends an already-signed-in visitor straight to /account/auction instead of the sign-in screen", async () => {
+    global.fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ id: "u1", email: "a@example.com", name: "A" }) })) as unknown as typeof fetch;
+    render(<AuctionFlow />);
+
+    // The session check is async; wait for it to settle before clicking,
+    // otherwise the click lands during the still-false default state.
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledWith("http://127.0.0.1:3001/auth/me", { credentials: "include" }));
+
+    fireEvent.click(screen.getByText("Displace"));
+    await waitFor(() => expect(window.location.href).toBe("/account/auction"));
+    expect(screen.queryByText("Sign in to claim the seat")).not.toBeInTheDocument();
+  });
+
+  it("still shows the sign-in screen when the session check fails outright", async () => {
+    global.fetch = vi.fn(async () => {
+      throw new Error("network down");
+    }) as unknown as typeof fetch;
+    render(<AuctionFlow />);
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+    fireEvent.click(screen.getByText("Displace"));
+    expect(screen.getByText("Sign in to claim the seat")).toBeInTheDocument();
   });
 });
 

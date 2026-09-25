@@ -224,12 +224,42 @@ export default function AuctionFlow({
   apiBaseUrl?: string;
 } = {}) {
   const [screen, setScreen] = useState<Screen>(initialScreen);
+  // null while unknown (first render, before the check resolves) — Displace
+  // falls back to the sign-in screen in that window rather than waiting,
+  // since a signed-out visitor is by far the common case and the check
+  // resolves in well under the time it takes to actually click the button.
+  const [signedIn, setSignedIn] = useState(false);
   const theme = useThemeToggle();
   const clock = useCountdown(mockBiddingWindowClosesAt);
   const priceLabel = formatMoney(currentPriceCents);
 
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${apiBaseUrl}/auth/me`, { credentials: "include" })
+      .then((res) => {
+        if (!cancelled) setSignedIn(res.ok);
+      })
+      .catch(() => {
+        if (!cancelled) setSignedIn(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [apiBaseUrl]);
+
   function closeOverlay() {
     setScreen("closed");
+  }
+
+  // Already signed in — the real bid/deposit flow lives at /account/auction,
+  // so Displace goes straight there instead of showing sign-in links a
+  // signed-in visitor has no use for.
+  function handleDisplace() {
+    if (signedIn) {
+      window.location.href = "/account/auction";
+      return;
+    }
+    setScreen("auth");
   }
 
   return (
@@ -292,7 +322,7 @@ export default function AuctionFlow({
           </div>
         </div>
         <button
-          onClick={() => setScreen("auth")}
+          onClick={handleDisplace}
           style={{
             padding: "19px 58px",
             background: "var(--gold)",
