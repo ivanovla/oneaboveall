@@ -12,8 +12,6 @@ afterEach(() => {
 
 function mockFetch(handlers: {
   me?: unknown;
-  round?: unknown;
-  participation?: unknown;
   history?: unknown[];
   logoutOk?: boolean;
   patchEmailOk?: boolean;
@@ -33,12 +31,6 @@ function mockFetch(handlers: {
         ? { ok: false, status: 401 }
         : { ok: true, status: 200, json: async () => handlers.me };
     }
-    if (path === "/current-round") {
-      return { ok: true, status: 200, json: async () => (handlers.round === undefined ? null : handlers.round) };
-    }
-    if (path.match(/^\/rounds\/.+\/me$/)) {
-      return { ok: true, status: 200, json: async () => handlers.participation };
-    }
     if (path === "/me/history") {
       return { ok: true, status: 200, json: async () => ({ history: handlers.history ?? [] }) };
     }
@@ -54,7 +46,7 @@ describe("UserBadge", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("does not throw an unhandled rejection when the poll's fetch itself rejects", async () => {
+  it("does not throw when the session check's fetch itself rejects", async () => {
     global.fetch = vi.fn(async () => {
       throw new Error("network down");
     }) as unknown as typeof fetch;
@@ -63,21 +55,22 @@ describe("UserBadge", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("renders an initial-letter badge button when signed in, no round in play", async () => {
+  it("renders an initial-letter badge button when signed in", async () => {
     global.fetch = mockFetch({ me: { id: "u1", email: "a@example.com", name: "Alex" } }) as unknown as typeof fetch;
     render(<UserBadge apiBaseUrl="http://api.test" />);
     await waitFor(() => expect(screen.getByText("A")).toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Alex" })).toBeInTheDocument();
   });
 
-  it("shows the shaking notification dot when joined but not currently leading", async () => {
-    global.fetch = mockFetch({
-      me: { id: "u1", email: "a@example.com", name: "Alex" },
-      round: { roundId: "round-1", phase: "bidding", currentLeaderCents: 100_000, depositCents: 10_000, biddingClosesAt: "2026-09-23T12:00:00.000Z" },
-      participation: { joined: true, depositCents: 10_000, isLeading: false },
-    }) as unknown as typeof fetch;
+  it("checks the session exactly once — no repeated polling", async () => {
+    const fetchMock = mockFetch({ me: { id: "u1", email: "a@example.com", name: "Alex" } });
+    global.fetch = fetchMock as unknown as typeof fetch;
     render(<UserBadge apiBaseUrl="http://api.test" />);
-    await waitFor(() => expect(screen.getByRole("button", { name: "Alex — action needed" })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Alex" })).toBeInTheDocument());
+
+    const callsAfterMount = fetchMock.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(fetchMock.mock.calls.length).toBe(callsAfterMount);
   });
 
   it("opens the settings sidebar on click, showing identity and the real history", async () => {

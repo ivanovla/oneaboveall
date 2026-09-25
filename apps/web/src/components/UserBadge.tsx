@@ -1,9 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import HistoryTable from "./HistoryTable";
 
 type SessionUser = { id: string; email: string; name: string };
-
-const POLL_INTERVAL_MS = 5_000;
 
 // Matches the homepage's other top-right chrome chips (Light/Leaderboard in
 // AuctionFlow.tsx) in size and border/background treatment, but round —
@@ -21,17 +19,6 @@ const badgeButtonStyle: React.CSSProperties = {
   color: "var(--btn-fg)",
   background: "var(--gold)",
   border: "1px solid var(--line)",
-};
-
-const dotStyle: React.CSSProperties = {
-  position: "absolute",
-  top: -2,
-  right: -2,
-  width: 9,
-  height: 9,
-  borderRadius: "50%",
-  background: "#e0483e",
-  border: "2px solid var(--void)",
 };
 
 const sidebarOverlayStyle: React.CSSProperties = {
@@ -146,102 +133,43 @@ function EmailConfirmStep({
  * homepage's own Leaderboard chip — this sidebar doesn't duplicate it.
  *
  * Also handles the one-time post-signup email-confirmation step (the
- * `?welcome=1` the OAuth callbacks redirect new signups to), and the
- * shaking red notification dot when this user has joined the current round
- * but isn't the one currently leading it.
+ * `?welcome=1` the OAuth callbacks redirect new signups to).
+ *
+ * Checks session state exactly once, on mount — no polling. Being outbid
+ * is surfaced by email now (see PATCH /auth/email's confirmation copy),
+ * not by a live-polled notification dot, so there's nothing here that
+ * needs a repeating request to the server.
  */
 export default function UserBadge({ apiBaseUrl }: { apiBaseUrl: string }) {
   const [user, setUser] = useState<SessionUser | null>(null);
-  const [notify, setNotify] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [awaitingEmailConfirm, setAwaitingEmailConfirm] = useState(false);
-  const cancelledRef = useRef(false);
-  const welcomeCheckedRef = useRef(false);
 
   useEffect(() => {
-    cancelledRef.current = false;
-
-    async function poll() {
-      // A network blip here (fetch rejecting outright, not just a non-OK
-      // response) must not become an unhandled rejection that fires again
-      // every POLL_INTERVAL_MS — fail closed to "no badge state changes
-      // this tick" and let the next interval retry.
-      try {
-        const meRes = await fetch(`${apiBaseUrl}/auth/me`, { credentials: "include" });
-        if (cancelledRef.current) return;
-        if (!meRes.ok) {
+    let cancelled = false;
+    fetch(`${apiBaseUrl}/auth/me`, { credentials: "include" })
+      .then((res) => {
+        if (cancelled) return;
+        if (!res.ok) {
           setUser(null);
-          setNotify(false);
           return;
         }
-        const meData: SessionUser = await meRes.json();
-        if (cancelledRef.current) return;
-        setUser(meData);
-
-        // Checked exactly once per page load, not on every 5s poll tick —
-        // otherwise closing the sidebar without submitting would just
-        // reopen it on the next tick.
-        if (!welcomeCheckedRef.current) {
-          welcomeCheckedRef.current = true;
-          if (new URLSearchParams(window.location.search).get("welcome") === "1") {
-            setAwaitingEmailConfirm(true);
-            setSidebarOpen(true);
-          }
+        return res.json();
+      })
+      .then((data?: SessionUser) => {
+        if (cancelled || !data) return;
+        setUser(data);
+        if (new URLSearchParams(window.location.search).get("welcome") === "1") {
+          setAwaitingEmailConfirm(true);
+          setSidebarOpen(true);
         }
-
-        const roundRes = await fetch(`${apiBaseUrl}/current-round`, { credentials: "include" });
-        if (cancelledRef.current) return;
-        const round = roundRes.ok ? await roundRes.json() : null;
-        if (!round) {
-          setNotify(false);
-          return;
-        }
-
-        const participationRes = await fetch(`${apiBaseUrl}/rounds/${round.roundId}/me`, { credentials: "include" });
-        if (cancelledRef.current) return;
-        if (!participationRes.ok) {
-          setNotify(false);
-          return;
-        }
-        const participation = await participationRes.json();
-        if (cancelledRef.current) return;
-        setNotify(!!participation.joined && participation.isLeading === false);
-      } catch {
-        // Leave user/notify at whatever they last were — a transient
-        // failure shouldn't make a signed-in badge disappear.
-      }
-    }
-
-    poll();
-
-    let intervalId: ReturnType<typeof setInterval> | null = null;
-    function startPolling() {
-      if (intervalId) return;
-      intervalId = setInterval(poll, POLL_INTERVAL_MS);
-    }
-    function stopPolling() {
-      if (intervalId) {
-        clearInterval(intervalId);
-        intervalId = null;
-      }
-    }
-    function handleVisibilityChange() {
-      if (document.visibilityState === "hidden") {
-        stopPolling();
-      } else {
-        poll();
-        startPolling();
-      }
-    }
-
-    startPolling();
-    document.addEventListener("visibilitychange", handleVisibilityChange);
+      })
+      .catch(() => {
+        if (!cancelled) setUser(null);
+      });
     return () => {
-      cancelledRef.current = true;
-      stopPolling();
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiBaseUrl]);
 
   // Closing with Escape is standard drawer behavior and cheap to support —
@@ -281,13 +209,8 @@ export default function UserBadge({ apiBaseUrl }: { apiBaseUrl: string }) {
 
   return (
     <>
-      <button
-        onClick={() => setSidebarOpen(true)}
-        style={{ ...badgeButtonStyle, animation: notify ? "badge-shake 3s ease-in-out infinite" : undefined }}
-        aria-label={notify ? `${user.name || "Account"} — action needed` : user.name || "Account"}
-      >
+      <button onClick={() => setSidebarOpen(true)} style={badgeButtonStyle} aria-label={user.name || "Account"}>
         {initial || "•"}
-        {notify && <span style={dotStyle} aria-hidden="true" />}
       </button>
 
       {sidebarOpen && (
