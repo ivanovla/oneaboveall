@@ -2,9 +2,24 @@ import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import AuctionFlow from "../src/components/AuctionFlow";
 
+// The account sidebar's Auction tab renders the real LiveAuction, which
+// imports these — same mocks as LiveAuction.test.tsx/UserBadge.test.tsx.
+vi.mock("@stripe/stripe-js", () => ({
+  loadStripe: vi.fn(async () => ({
+    confirmPayment: vi.fn(async () => ({ error: undefined })),
+  })),
+}));
+
+vi.mock("@stripe/react-stripe-js", () => ({
+  Elements: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  PaymentElement: () => <div data-testid="payment-element" />,
+  useStripe: () => ({ confirmPayment: vi.fn(async () => ({ error: undefined })) }),
+  useElements: () => ({}),
+}));
+
 // AuctionFlow checks /auth/me on mount (to route an already-signed-in
-// Displace click straight to /account/auction) — real Node fetch is global
-// even under jsdom, so without a mock every test would fire a real network
+// Displace click to the account sidebar) — real Node fetch is global even
+// under jsdom, so without a mock every test would fire a real network
 // request. Defaults to signed-out (401), matching the common case; tests
 // exercising the signed-in path override this per-test.
 beforeEach(() => {
@@ -53,9 +68,9 @@ describe("AuctionFlow", () => {
   // These are real, top-level-navigation links into the live API's OAuth
   // entry points (GET /auth/google, GET /auth/apple) — not client-side
   // handlers — so the browser follows Google/Apple's own redirect chain and
-  // lands back on /account. No mock sign-in screen exists anymore; the real
-  // bid/deposit flow lives at /account/auction (LiveAuction.tsx) once
-  // signed in.
+  // lands back on /. No mock sign-in screen exists anymore; the real
+  // bid/deposit flow lives in the account sidebar's Auction tab
+  // (LiveAuction.tsx, see UserBadge.tsx) once signed in.
   it("wires Continue with Google/Apple to the live API's OAuth entry points", () => {
     render(<AuctionFlow apiBaseUrl="http://api.test" />);
     fireEvent.click(screen.getByText("Displace"));
@@ -85,8 +100,13 @@ describe("AuctionFlow — already signed in", () => {
     window.location = originalLocation;
   });
 
-  it("sends an already-signed-in visitor straight to /account/auction instead of the sign-in screen", async () => {
-    global.fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ id: "u1", email: "a@example.com", name: "A" }) })) as unknown as typeof fetch;
+  it("opens the account sidebar on the Auction tab for an already-signed-in visitor, instead of the sign-in screen", async () => {
+    global.fetch = vi.fn(async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path === "/auth/me") return { ok: true, status: 200, json: async () => ({ id: "u1", email: "a@example.com", name: "A" }) };
+      if (path === "/current-round") return { ok: true, status: 200, json: async () => null };
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as unknown as typeof fetch;
     render(<AuctionFlow />);
 
     // The session check is async; wait for it to settle before clicking,
@@ -94,7 +114,9 @@ describe("AuctionFlow — already signed in", () => {
     await waitFor(() => expect(global.fetch).toHaveBeenCalledWith("http://127.0.0.1:3001/auth/me", { credentials: "include" }));
 
     fireEvent.click(screen.getByText("Displace"));
-    await waitFor(() => expect(window.location.href).toBe("/account/auction"));
+
+    expect(screen.getByRole("dialog", { name: /account settings/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Auction" })).toHaveStyle({ background: "var(--gold)" });
     expect(screen.queryByText("Sign in to claim the seat")).not.toBeInTheDocument();
   });
 
