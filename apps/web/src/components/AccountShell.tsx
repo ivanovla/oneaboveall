@@ -71,7 +71,7 @@ function EmailConfirmStep({
       <div style={{ width: "100%", maxWidth: 420, padding: "28px 26px", border: "1px solid var(--line)", background: "var(--panel-2)" }}>
         <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: 28 }}>One more thing</div>
         <div style={{ marginTop: 10, fontSize: 13, lineHeight: 1.6, color: "var(--fg-dim)" }}>
-          We'll notify you at this address if you win a round.
+          We'll notify you at this address about activity on your bids — including if you're outbid or you win a round.
         </div>
         <label htmlFor="account-email" style={{ display: "block", marginTop: 20, fontSize: 9, letterSpacing: ".16em", textTransform: "uppercase", color: "var(--fg-faint)" }}>
           Email
