@@ -8,7 +8,7 @@ apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: redirect
-  namespace: oneabobeall
+  namespace: oneaboveall
 spec:
   redirectScheme:
     scheme: https
@@ -17,8 +17,8 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: oneabobeall-ingress
-  namespace: oneabobeall
+  name: oneaboveall-ingress
+  namespace: oneaboveall
   annotations:
     traefik.ingress.kubernetes.io/router.entrypoints: websecure
     traefik.ingress.kubernetes.io/router.tls: "true"
@@ -27,39 +27,39 @@ spec:
   ingressClassName: traefik
   tls:
     - hosts:
-        - oneabobeall.org
-        - www.oneabobeall.org
-        - api.oneabobeall.org
-      secretName: oneabobeall-tls
+        - oneaboveall.org
+        - www.oneaboveall.org
+        - api.oneaboveall.org
+      secretName: oneaboveall-tls
   rules:
-    - host: oneabobeall.org
+    - host: oneaboveall.org
       http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: oneabobeall-web
+                name: oneaboveall-web
                 port:
                   number: 80
-    - host: www.oneabobeall.org
+    - host: www.oneaboveall.org
       http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: oneabobeall-web
+                name: oneaboveall-web
                 port:
                   number: 80
-    - host: api.oneabobeall.org
+    - host: api.oneaboveall.org
       http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: oneabobeall-api
+                name: oneaboveall-api
                 port:
                   number: 80
 ---
@@ -68,40 +68,40 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: oneabobeall-ingress-redirect
-  namespace: oneabobeall
+  name: oneaboveall-ingress-redirect
+  namespace: oneaboveall
   annotations:
     traefik.ingress.kubernetes.io/router.entrypoints: web
-    traefik.ingress.kubernetes.io/router.middlewares: oneabobeall-redirect@kubernetescrd
+    traefik.ingress.kubernetes.io/router.middlewares: oneaboveall-redirect@kubernetescrd
 spec:
   rules:
-    - host: oneabobeall.org
+    - host: oneaboveall.org
       http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: oneabobeall-web
+                name: oneaboveall-web
                 port:
                   number: 80
-    - host: www.oneabobeall.org
+    - host: www.oneaboveall.org
       http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: oneabobeall-web
+                name: oneaboveall-web
                 port:
                   number: 80
-    - host: api.oneabobeall.org
+    - host: api.oneaboveall.org
       http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: oneabobeall-api
+                name: oneaboveall-api
                 port:
                   number: 80

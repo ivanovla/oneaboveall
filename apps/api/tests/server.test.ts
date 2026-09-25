@@ -64,20 +64,20 @@ describe("buildServer — CORS_ORIGIN validation", () => {
 // through the actual response headers instead.
 describe("buildServer — CORS response headers", () => {
   it("echoes back whichever configured origin the request came from", async () => {
-    process.env.CORS_ORIGIN = "http://127.0.0.1:4321, https://oneabobeall.org";
+    process.env.CORS_ORIGIN = "http://127.0.0.1:4321, https://oneaboveall.org";
     const app = buildServer();
 
     const first = await app.inject({ method: "GET", url: "/scene", headers: { origin: "http://127.0.0.1:4321" } });
     expect(first.headers["access-control-allow-origin"]).toBe("http://127.0.0.1:4321");
     expect(first.headers["access-control-allow-credentials"]).toBe("true");
 
-    const second = await app.inject({ method: "GET", url: "/scene", headers: { origin: "https://oneabobeall.org" } });
-    expect(second.headers["access-control-allow-origin"]).toBe("https://oneabobeall.org");
+    const second = await app.inject({ method: "GET", url: "/scene", headers: { origin: "https://oneaboveall.org" } });
+    expect(second.headers["access-control-allow-origin"]).toBe("https://oneaboveall.org");
     expect(second.headers["access-control-allow-credentials"]).toBe("true");
   });
 
   it("never emits a comma-joined allow-origin header", async () => {
-    process.env.CORS_ORIGIN = "http://127.0.0.1:4321,https://oneabobeall.org";
+    process.env.CORS_ORIGIN = "http://127.0.0.1:4321,https://oneaboveall.org";
     const app = buildServer();
 
     const response = await app.inject({ method: "GET", url: "/scene", headers: { origin: "http://127.0.0.1:4321" } });

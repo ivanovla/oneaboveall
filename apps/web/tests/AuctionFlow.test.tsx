@@ -287,12 +287,12 @@ describe("AuctionFlow — theme toggle", () => {
 
     fireEvent.click(toggle);
     expect(document.documentElement.dataset.theme).toBe("light");
-    expect(localStorage.getItem("oneabobeall:theme")).toBe("light");
+    expect(localStorage.getItem("oneaboveall:theme")).toBe("light");
     expect(screen.getByRole("button", { name: /switch to dark theme/i })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /switch to dark theme/i }));
     expect(document.documentElement.dataset.theme).toBeUndefined();
-    expect(localStorage.getItem("oneabobeall:theme")).toBe("dark");
+    expect(localStorage.getItem("oneaboveall:theme")).toBe("dark");
   });
 });
 

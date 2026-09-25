@@ -74,7 +74,7 @@ describe("GET /auth/google", () => {
     expect(response.headers.location).toBe("https://accounts.google.com/o/oauth2/v2/auth?mock=1");
     expect(response.headers["set-cookie"]).toBeDefined();
     const cookies = Array.isArray(response.headers["set-cookie"]) ? response.headers["set-cookie"] : [response.headers["set-cookie"]];
-    expect(cookies.some((c) => c?.includes("oneabobeall_oauth_state="))).toBe(true);
+    expect(cookies.some((c) => c?.includes("oneaboveall_oauth_state="))).toBe(true);
   });
 
   // The mirror of authApple.test.ts's "SameSite=None" assertion. The
@@ -146,7 +146,7 @@ describe("GET /auth/google/callback", () => {
     const response = await app.inject({
       method: "GET",
       url: "/auth/google/callback?code=mock-code&state=mock-state",
-      headers: { cookie: "oneabobeall_oauth_state=wrong-state.mock-verifier" },
+      headers: { cookie: "oneaboveall_oauth_state=wrong-state.mock-verifier" },
     });
 
     expect(response.statusCode).toBe(302);
@@ -167,7 +167,7 @@ describe("GET /auth/google/callback", () => {
     const app = buildServer();
     const stateResponse = await app.inject({ method: "GET", url: "/auth/google" });
     const stateCookie = (Array.isArray(stateResponse.headers["set-cookie"]) ? stateResponse.headers["set-cookie"] : [stateResponse.headers["set-cookie"]])
-      .find((c) => c?.includes("oneabobeall_oauth_state="))!;
+      .find((c) => c?.includes("oneaboveall_oauth_state="))!;
 
     const response = await app.inject({
       method: "GET",
@@ -180,7 +180,7 @@ describe("GET /auth/google/callback", () => {
     // uses it to show a one-time "confirm your email" prompt.
     expect(response.headers.location).toBe(process.env.PUBLIC_APP_URL + "/?welcome=1");
     const cookies = Array.isArray(response.headers["set-cookie"]) ? response.headers["set-cookie"] : [response.headers["set-cookie"]];
-    expect(cookies.some((c) => c?.includes("oneabobeall_session="))).toBe(true);
+    expect(cookies.some((c) => c?.includes("oneaboveall_session="))).toBe(true);
 
     // Locks in that the PKCE code_verifier generated at /auth/google was
     // actually threaded through to the token exchange, not just generated
@@ -214,7 +214,7 @@ describe("GET /auth/google/callback", () => {
     const app = buildServer();
     const stateResponse = await app.inject({ method: "GET", url: "/auth/google" });
     const stateCookie = (Array.isArray(stateResponse.headers["set-cookie"]) ? stateResponse.headers["set-cookie"] : [stateResponse.headers["set-cookie"]])
-      .find((c) => c?.includes("oneabobeall_oauth_state="))!;
+      .find((c) => c?.includes("oneaboveall_oauth_state="))!;
 
     const response = await app.inject({
       method: "GET",
@@ -230,6 +230,6 @@ describe("GET /auth/google/callback", () => {
     expect(selectSpy).toHaveBeenCalled();
     // No session cookie handed out on a failed sign-in.
     const cookies = Array.isArray(response.headers["set-cookie"]) ? response.headers["set-cookie"] : [response.headers["set-cookie"]];
-    expect(cookies.some((c) => c?.includes("oneabobeall_session="))).toBe(false);
+    expect(cookies.some((c) => c?.includes("oneaboveall_session="))).toBe(false);
   });
 });

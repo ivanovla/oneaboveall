@@ -1,6 +1,6 @@
 import { generators } from "openid-client";
 
-export const OAUTH_STATE_COOKIE_NAME = "oneabobeall_oauth_state";
+export const OAUTH_STATE_COOKIE_NAME = "oneaboveall_oauth_state";
 
 export function generateState(): string {
   return generators.state();

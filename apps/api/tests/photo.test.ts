@@ -14,7 +14,7 @@ function buildMultipartBody(field: { filename: string; contentType: string; cont
   body: Buffer;
   contentType: string;
 } {
-  const boundary = "----test-boundary-oneabobeall";
+  const boundary = "----test-boundary-oneaboveall";
   const head = Buffer.from(
     `--${boundary}\r\n` +
       `Content-Disposition: form-data; name="photo"; filename="${field.filename}"\r\n` +
@@ -56,7 +56,7 @@ describe("POST /auth/photo", () => {
     const response = await app.inject({
       method: "POST",
       url: "/auth/photo",
-      headers: { cookie: `oneabobeall_session=${token}`, "content-type": contentType },
+      headers: { cookie: `oneaboveall_session=${token}`, "content-type": contentType },
       payload: body,
     });
 
@@ -82,7 +82,7 @@ describe("POST /auth/photo", () => {
     const response = await app.inject({
       method: "POST",
       url: "/auth/photo",
-      headers: { cookie: `oneabobeall_session=${token}`, "content-type": contentType },
+      headers: { cookie: `oneaboveall_session=${token}`, "content-type": contentType },
       payload: body,
     });
 
@@ -97,12 +97,12 @@ describe("POST /auth/photo", () => {
     const app = buildServer();
 
     const first = buildMultipartBody({ filename: "a.jpg", contentType: "image/jpeg", content: Buffer.from("jpeg-bytes") });
-    await app.inject({ method: "POST", url: "/auth/photo", headers: { cookie: `oneabobeall_session=${token}`, "content-type": first.contentType }, payload: first.body });
+    await app.inject({ method: "POST", url: "/auth/photo", headers: { cookie: `oneaboveall_session=${token}`, "content-type": first.contentType }, payload: first.body });
     const jpgPath = path.join(UPLOAD_DIR, `${user.id}.jpg`);
     expect(existsSync(jpgPath)).toBe(true);
 
     const second = buildMultipartBody({ filename: "a.png", contentType: "image/png", content: Buffer.from("png-bytes") });
-    const response = await app.inject({ method: "POST", url: "/auth/photo", headers: { cookie: `oneabobeall_session=${token}`, "content-type": second.contentType }, payload: second.body });
+    const response = await app.inject({ method: "POST", url: "/auth/photo", headers: { cookie: `oneaboveall_session=${token}`, "content-type": second.contentType }, payload: second.body });
     expect(response.statusCode).toBe(200);
 
     const pngPath = path.join(UPLOAD_DIR, `${user.id}.png`);
@@ -134,7 +134,7 @@ describe("GET /photos/:userId", () => {
     const app = buildServer();
 
     const { body, contentType } = buildMultipartBody({ filename: "a.png", contentType: "image/png", content: Buffer.from("png-bytes") });
-    await app.inject({ method: "POST", url: "/auth/photo", headers: { cookie: `oneabobeall_session=${token}`, "content-type": contentType }, payload: body });
+    await app.inject({ method: "POST", url: "/auth/photo", headers: { cookie: `oneaboveall_session=${token}`, "content-type": contentType }, payload: body });
 
     const response = await app.inject({ method: "GET", url: `/photos/${user.id}` });
     expect(response.statusCode).toBe(200);

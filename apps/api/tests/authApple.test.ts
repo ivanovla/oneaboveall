@@ -71,7 +71,7 @@ describe("GET /auth/apple", () => {
     expect(response.statusCode).toBe(302);
     expect(response.headers.location).toBe("https://appleid.apple.com/auth/authorize?mock=1");
     const cookies = Array.isArray(response.headers["set-cookie"]) ? response.headers["set-cookie"] : [response.headers["set-cookie"]];
-    expect(cookies.some((c) => c?.includes("oneabobeall_oauth_state="))).toBe(true);
+    expect(cookies.some((c) => c?.includes("oneaboveall_oauth_state="))).toBe(true);
   });
 
   // Unlike Google's state cookie (SameSite=Lax, correct for its GET-based
@@ -141,7 +141,7 @@ describe("POST /auth/apple/callback", () => {
     const response = await app.inject({
       method: "POST",
       url: "/auth/apple/callback",
-      headers: { cookie: "oneabobeall_oauth_state=wrong-state.mock-verifier" },
+      headers: { cookie: "oneaboveall_oauth_state=wrong-state.mock-verifier" },
       payload: { code: "mock-code", state: "mock-state" },
     });
 
@@ -159,7 +159,7 @@ describe("POST /auth/apple/callback", () => {
     const app = buildServer();
     const stateResponse = await app.inject({ method: "GET", url: "/auth/apple" });
     const stateCookie = (Array.isArray(stateResponse.headers["set-cookie"]) ? stateResponse.headers["set-cookie"] : [stateResponse.headers["set-cookie"]])
-      .find((c) => c?.includes("oneabobeall_oauth_state="))!;
+      .find((c) => c?.includes("oneaboveall_oauth_state="))!;
 
     const response = await app.inject({
       method: "POST",
@@ -177,7 +177,7 @@ describe("POST /auth/apple/callback", () => {
     const app = buildServer();
     const stateResponse = await app.inject({ method: "GET", url: "/auth/apple" });
     const stateCookie = (Array.isArray(stateResponse.headers["set-cookie"]) ? stateResponse.headers["set-cookie"] : [stateResponse.headers["set-cookie"]])
-      .find((c) => c?.includes("oneabobeall_oauth_state="))!;
+      .find((c) => c?.includes("oneaboveall_oauth_state="))!;
 
     const response = await app.inject({
       method: "POST",
@@ -198,7 +198,7 @@ describe("POST /auth/apple/callback", () => {
     // uses it to show a one-time "confirm your email" prompt.
     expect(response.headers.location).toBe(process.env.PUBLIC_APP_URL + "/?welcome=1");
     const cookies = Array.isArray(response.headers["set-cookie"]) ? response.headers["set-cookie"] : [response.headers["set-cookie"]];
-    expect(cookies.some((c) => c?.includes("oneabobeall_session="))).toBe(true);
+    expect(cookies.some((c) => c?.includes("oneaboveall_session="))).toBe(true);
     expect(getSetCookieHeader(response, OAUTH_STATE_COOKIE_NAME)).toMatch(/Expires=Thu, 01 Jan 1970/);
 
     const [user] = await db.select().from(users).where(eq(users.provider, "apple"));
@@ -219,7 +219,7 @@ describe("POST /auth/apple/callback", () => {
     const app = buildServer();
     const stateResponse = await app.inject({ method: "GET", url: "/auth/apple" });
     const stateCookie = (Array.isArray(stateResponse.headers["set-cookie"]) ? stateResponse.headers["set-cookie"] : [stateResponse.headers["set-cookie"]])
-      .find((c) => c?.includes("oneabobeall_oauth_state="))!;
+      .find((c) => c?.includes("oneaboveall_oauth_state="))!;
 
     const body = new URLSearchParams({
       code: "mock-code",
@@ -258,7 +258,7 @@ describe("POST /auth/apple/callback", () => {
     const app = buildServer();
     const stateResponse = await app.inject({ method: "GET", url: "/auth/apple" });
     const stateCookie = (Array.isArray(stateResponse.headers["set-cookie"]) ? stateResponse.headers["set-cookie"] : [stateResponse.headers["set-cookie"]])
-      .find((c) => c?.includes("oneabobeall_oauth_state="))!;
+      .find((c) => c?.includes("oneaboveall_oauth_state="))!;
 
     const response = await app.inject({
       method: "POST",
@@ -285,7 +285,7 @@ describe("POST /auth/apple/callback", () => {
     const app = buildServer();
     const stateResponse = await app.inject({ method: "GET", url: "/auth/apple" });
     const stateCookie = (Array.isArray(stateResponse.headers["set-cookie"]) ? stateResponse.headers["set-cookie"] : [stateResponse.headers["set-cookie"]])
-      .find((c) => c?.includes("oneabobeall_oauth_state="))!;
+      .find((c) => c?.includes("oneaboveall_oauth_state="))!;
 
     const response = await app.inject({
       method: "POST",

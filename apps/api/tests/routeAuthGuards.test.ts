@@ -50,7 +50,7 @@ describe("session guard on the money-moving and per-user routes", () => {
       const app = buildServer();
       const response = await app.inject({
         ...request,
-        headers: { cookie: "oneabobeall_session=not-a-real-token" },
+        headers: { cookie: "oneaboveall_session=not-a-real-token" },
       });
 
       expect(response.statusCode).toBe(401);
@@ -80,7 +80,7 @@ describe("session guard on the money-moving and per-user routes", () => {
       .values({ provider: "google", providerId: "g-guard", email: "guard@example.com", name: "G" })
       .returning();
     const { token } = await createSession(user.id);
-    const cookie = `oneabobeall_session=${token}`;
+    const cookie = `oneaboveall_session=${token}`;
 
     const app = buildServer();
 

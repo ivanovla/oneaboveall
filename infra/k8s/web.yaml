@@ -1,4 +1,4 @@
-# The oneabobeall-nginx-conf ConfigMap this Deployment mounts is created by
+# The oneaboveall-nginx-conf ConfigMap this Deployment mounts is created by
 # deploy.sh directly from infra/docker/nginx.conf
 # (`kubectl create configmap ... --from-file=default.conf=...`), not defined
 # here — embedding a multi-line nginx config as inline YAML data loses
@@ -8,17 +8,17 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: oneabobeall-web
-  namespace: oneabobeall
+  name: oneaboveall-web
+  namespace: oneaboveall
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: oneabobeall-web
+      app: oneaboveall-web
   template:
     metadata:
       labels:
-        app: oneabobeall-web
+        app: oneaboveall-web
     spec:
       # Builds the static site into the shared volume before nginx starts,
       # so nginx never comes up pointed at an empty/missing docroot. Same
@@ -26,7 +26,7 @@ spec:
       # infra/docker/rebuild-server.mjs's header comment.
       initContainers:
         - name: initial-build
-          image: oneabobeall-web:${IMAGE_TAG}
+          image: oneaboveall-web:${IMAGE_TAG}
           imagePullPolicy: Never
           args: ["node", "rebuild-server.mjs", "--once"]
           volumeMounts:
@@ -64,11 +64,11 @@ spec:
             initialDelaySeconds: 2
             periodSeconds: 10
         # Long-running sidecar exposing POST /rebuild — apps/api calls this
-        # (via the oneabobeall-web Service, port 8080) every time a bidding
+        # (via the oneaboveall-web Service, port 8080) every time a bidding
         # window closes and installs a new champion. Not routed through the
         # Ingress; only reachable from inside the cluster.
         - name: web-rebuilder
-          image: oneabobeall-web:${IMAGE_TAG}
+          image: oneaboveall-web:${IMAGE_TAG}
           imagePullPolicy: Never
           ports:
             - containerPort: 8080
@@ -93,16 +93,16 @@ spec:
           emptyDir: {}
         - name: nginx-conf
           configMap:
-            name: oneabobeall-nginx-conf
+            name: oneaboveall-nginx-conf
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: oneabobeall-web
-  namespace: oneabobeall
+  name: oneaboveall-web
+  namespace: oneaboveall
 spec:
   selector:
-    app: oneabobeall-web
+    app: oneaboveall-web
   ports:
     - name: http
       protocol: TCP

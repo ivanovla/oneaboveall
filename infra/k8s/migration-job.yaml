@@ -12,8 +12,8 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: oneabobeall-migrate-${IMAGE_TAG}
-  namespace: oneabobeall
+  name: oneaboveall-migrate-${IMAGE_TAG}
+  namespace: oneaboveall
 spec:
   backoffLimit: 2
   template:
@@ -21,10 +21,10 @@ spec:
       restartPolicy: Never
       containers:
         - name: migrate
-          image: oneabobeall-api:${IMAGE_TAG}
+          image: oneaboveall-api:${IMAGE_TAG}
           imagePullPolicy: Never
           workingDir: /app/apps/engine
           command: ["npx", "drizzle-kit", "push", "--force"]
           envFrom:
             - secretRef:
-                name: oneabobeall-secrets
+                name: oneaboveall-secrets

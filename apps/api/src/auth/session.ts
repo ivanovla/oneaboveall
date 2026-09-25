@@ -3,7 +3,7 @@ import { and, eq, gt } from "drizzle-orm";
 import { db } from "engine/db/client";
 import { sessions, users } from "engine/db/schema";
 
-export const SESSION_COOKIE_NAME = "oneabobeall_session";
+export const SESSION_COOKIE_NAME = "oneaboveall_session";
 
 const SESSION_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 

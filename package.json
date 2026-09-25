@@ -1,5 +1,5 @@
 {
-  "name": "oneabobeall",
+  "name": "oneaboveall",
   "private": true,
   "workspaces": [
     "apps/*"

@@ -2,7 +2,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: api-uploads-pvc
-  namespace: oneabobeall
+  namespace: oneaboveall
 spec:
   accessModes:
     - ReadWriteOnce
@@ -13,8 +13,8 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: oneabobeall-api
-  namespace: oneabobeall
+  name: oneaboveall-api
+  namespace: oneaboveall
 spec:
   # Single replica: api-uploads-pvc is ReadWriteOnce (local-path has no
   # ReadWriteMany), so a second replica couldn't mount it. The scheduler's
@@ -25,15 +25,15 @@ spec:
   replicas: 1
   selector:
     matchLabels:
-      app: oneabobeall-api
+      app: oneaboveall-api
   template:
     metadata:
       labels:
-        app: oneabobeall-api
+        app: oneaboveall-api
     spec:
       containers:
         - name: api
-          image: oneabobeall-api:${IMAGE_TAG}
+          image: oneaboveall-api:${IMAGE_TAG}
           imagePullPolicy: Never
           ports:
             - containerPort: 3001
@@ -45,10 +45,10 @@ spec:
             # In-cluster address of the web rebuilder sidecar's internal
             # endpoint (see web.yaml) — not exposed through the Ingress.
             - name: WEB_REBUILD_URL
-              value: "http://oneabobeall-web:8080/rebuild"
+              value: "http://oneaboveall-web:8080/rebuild"
           envFrom:
             - secretRef:
-                name: oneabobeall-secrets
+                name: oneaboveall-secrets
           volumeMounts:
             - name: uploads
               mountPath: /app/apps/api/uploads
@@ -85,16 +85,16 @@ spec:
             claimName: api-uploads-pvc
         - name: apple-key
           secret:
-            secretName: oneabobeall-apple-key
+            secretName: oneaboveall-apple-key
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: oneabobeall-api
-  namespace: oneabobeall
+  name: oneaboveall-api
+  namespace: oneaboveall
 spec:
   selector:
-    app: oneabobeall-api
+    app: oneaboveall-api
   ports:
     - protocol: TCP
       port: 80

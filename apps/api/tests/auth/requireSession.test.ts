@@ -38,7 +38,7 @@ describe("requireSession", () => {
     const response = await app.inject({
       method: "GET",
       url: "/test",
-      headers: { cookie: `oneabobeall_session=${token}` },
+      headers: { cookie: `oneaboveall_session=${token}` },
     });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ id: user.id, email: "c@example.com", name: "C" });
@@ -72,7 +72,7 @@ describe("requireSession", () => {
     const response = await app.inject({
       method: "GET",
       url: "/test",
-      headers: { cookie: "oneabobeall_session=not-a-real-token" },
+      headers: { cookie: "oneaboveall_session=not-a-real-token" },
     });
     expect(response.statusCode).toBe(401);
   });

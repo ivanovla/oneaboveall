@@ -110,7 +110,7 @@ const chromeButtonStyle: React.CSSProperties = {
 
 // Keep in sync with the pre-paint theme script in layouts/BaseLayout.astro,
 // which reads the same key before this island ever hydrates.
-const THEME_STORAGE_KEY = "oneabobeall:theme";
+const THEME_STORAGE_KEY = "oneaboveall:theme";
 
 /**
  * Drives the `data-theme` attribute on <html>, which tokens.css keys its

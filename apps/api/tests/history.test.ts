@@ -28,7 +28,7 @@ describe("GET /me/history", () => {
     const { token } = await createSession(user.id);
 
     const app = buildServer();
-    const response = await app.inject({ method: "GET", url: "/me/history", headers: { cookie: `oneabobeall_session=${token}` } });
+    const response = await app.inject({ method: "GET", url: "/me/history", headers: { cookie: `oneaboveall_session=${token}` } });
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ history: [] });
@@ -46,7 +46,7 @@ describe("GET /me/history", () => {
     ]);
 
     const app = buildServer();
-    const response = await app.inject({ method: "GET", url: "/me/history", headers: { cookie: `oneabobeall_session=${token}` } });
+    const response = await app.inject({ method: "GET", url: "/me/history", headers: { cookie: `oneaboveall_session=${token}` } });
 
     expect(response.statusCode).toBe(200);
     const body = response.json();

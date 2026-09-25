@@ -3,7 +3,7 @@
 ## Architecture
 
 Runs on the same Hetzner k3s cluster as job-link-boil, in its own namespace
-(`oneabobeall`) — nothing here touches the `job-link` namespace. Same
+(`oneaboveall`) — nothing here touches the `job-link` namespace. Same
 conventions as that project: Traefik ingress, cert-manager for TLS,
 registry-free deploys (`docker build` locally → `docker save | sudo k3s ctr
 images import -`), manual `deploy.sh`, no CI.
@@ -11,12 +11,12 @@ images import -`), manual `deploy.sh`, no CI.
 ```
                          Traefik Ingress (TLS via cert-manager)
                           /                              \
-              oneabobeall.org                    api.oneabobeall.org
+              oneaboveall.org                    api.oneaboveall.org
                     |                                     |
-          Service: oneabobeall-web              Service: oneabobeall-api
+          Service: oneaboveall-web              Service: oneaboveall-api
                     |                                     |
-     ┌──────────────┴──────────────┐            Deployment: oneabobeall-api
-     │  Deployment: oneabobeall-web │            (1 replica, PVC for photo
+     ┌──────────────┴──────────────┐            Deployment: oneaboveall-api
+     │  Deployment: oneaboveall-web │            (1 replica, PVC for photo
      │                              │             uploads, PVC for Apple
      │  init: build astro site      │             signing key)
      │        into shared volume    │                      |
@@ -59,9 +59,9 @@ already fetched live from `GET /current-round` by the client (see
    annotation in that file before the first deploy.
 3. **DNS**: point these at the VPS's public IP (A records, or AAAA if
    IPv6):
-   - `oneabobeall.org`
-   - `www.oneabobeall.org`
-   - `api.oneabobeall.org`
+   - `oneaboveall.org`
+   - `www.oneaboveall.org`
+   - `api.oneaboveall.org`
 
    Give DNS a few minutes to propagate before the first deploy — the very
    first cert-manager issuance needs the domains to already resolve.
@@ -73,8 +73,8 @@ None of these are committed — `infra/secrets/` is gitignored.
 ### `infra/secrets/prod.env`
 
 One `KEY=value` per line, consumed by `kubectl create secret generic
-oneabobeall-secrets --from-env-file=...` (see `deploy.sh`). Every key here
-becomes an environment variable on the `oneabobeall-api` container via
+oneaboveall-secrets --from-env-file=...` (see `deploy.sh`). Every key here
+becomes an environment variable on the `oneaboveall-api` container via
 `envFrom`, **except** `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD`,
 which only bootstrap the in-cluster Postgres container (`infra/k8s/postgres.yaml`)
 — apps/api never reads those three directly, only `DATABASE_URL`. Keep them
@@ -82,13 +82,13 @@ consistent with each other manually; nothing derives one from the other.
 
 ```bash
 # Postgres bootstrap — keep in sync with DATABASE_URL below
-POSTGRES_DB=oneabobeall
-POSTGRES_USER=oneabobeall
+POSTGRES_DB=oneaboveall
+POSTGRES_USER=oneaboveall
 POSTGRES_PASSWORD=<generate a strong password>
 
 # apps/engine / apps/api — host "postgres" is the in-cluster Service name,
-# resolves within the oneabobeall namespace without any extra config
-DATABASE_URL=postgres://oneabobeall:<same password as above>@postgres:5432/oneabobeall
+# resolves within the oneaboveall namespace without any extra config
+DATABASE_URL=postgres://oneaboveall:<same password as above>@postgres:5432/oneaboveall
 
 # Stripe — LIVE keys, not test keys (this is production)
 STRIPE_SECRET_KEY=sk_live_...
@@ -97,7 +97,7 @@ STRIPE_WEBHOOK_SECRET=whsec_...   # from the live webhook endpoint, see below
 # Must be the web origin exactly — no wildcard, no trailing slash. The API
 # sends credentialed CORS responses (session cookie), which browsers reject
 # outright against a wildcard origin (see server.ts's own comment).
-CORS_ORIGIN=https://oneabobeall.org
+CORS_ORIGIN=https://oneaboveall.org
 
 GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
@@ -110,17 +110,17 @@ APPLE_SERVICES_ID=...
 # by infra/k8s/api.yaml at that same relative path.
 APPLE_PRIVATE_KEY_PATH=./apple-private-key.p8
 
-PUBLIC_APP_URL=https://oneabobeall.org
-API_PUBLIC_URL=https://api.oneabobeall.org
+PUBLIC_APP_URL=https://oneaboveall.org
+API_PUBLIC_URL=https://api.oneaboveall.org
 ```
 
-Register `https://api.oneabobeall.org/auth/google/callback` and
-`https://api.oneabobeall.org/auth/apple/callback` as authorized redirect
+Register `https://api.oneaboveall.org/auth/google/callback` and
+`https://api.oneaboveall.org/auth/apple/callback` as authorized redirect
 URIs with Google and Apple respectively before the first real sign-in —
 both currently point at `127.0.0.1` for local dev only.
 
 Register the live Stripe webhook endpoint
-(`https://api.oneabobeall.org/webhooks/stripe`, `payment_intent.succeeded`)
+(`https://api.oneaboveall.org/webhooks/stripe`, `payment_intent.succeeded`)
 in the Stripe dashboard and put its signing secret in
 `STRIPE_WEBHOOK_SECRET` above — it's different from the test-mode webhook
 secret already in `apps/api/.env.example`.
@@ -130,7 +130,7 @@ secret already in `apps/api/.env.example`.
 The `.p8` signing key downloaded from Apple's developer portal for the
 Services ID above. Never baked into any image (`.dockerignore` excludes
 every `*.p8`) — mounted into the api pod at runtime as its own Kubernetes
-Secret (`oneabobeall-apple-key`).
+Secret (`oneaboveall-apple-key`).
 
 ### `apps/web/.env.production`
 
@@ -146,7 +146,7 @@ without this file specifically to prevent that.
 # In-cluster address — the build runs inside the cluster (via the
 # web-rebuilder image), so it talks to the api Service directly rather than
 # going back out through the public domain and Traefik.
-API_BASE_URL=http://oneabobeall-api
+API_BASE_URL=http://oneaboveall-api
 
 REQUIRE_LIVE_DATA=true
 
@@ -167,14 +167,14 @@ Builds both images (timestamp-tagged, never overwritten — imports into k3s
 directly, no registry), applies the namespace, (re)creates the two secrets
 and the nginx ConfigMap from the files above, applies Postgres, runs the
 schema push (`drizzle-kit push`, this project has no migrations directory —
-see `infra/k8s/migration-job.yaml`), then rolls out `oneabobeall-api` and
-`oneabobeall-web`, and applies the Ingress.
+see `infra/k8s/migration-job.yaml`), then rolls out `oneaboveall-api` and
+`oneaboveall-web`, and applies the Ingress.
 
 Changed only a secret (`prod.env` or the Apple key), not code:
 
 ```bash
 bash infra/scripts/update-secrets.sh
-kubectl rollout restart deployment/oneabobeall-api -n oneabobeall
+kubectl rollout restart deployment/oneaboveall-api -n oneaboveall
 ```
 
 ## Verifying the scene rebuild pipeline
@@ -184,15 +184,15 @@ endpoint is called, which only happens when `apps/api`'s scheduler installs
 a new champion. To check this is actually wired up after a deploy:
 
 ```bash
-kubectl logs -n oneabobeall deployment/oneabobeall-web -c web-rebuilder --tail=50
+kubectl logs -n oneaboveall deployment/oneaboveall-web -c web-rebuilder --tail=50
 ```
 
 You should see `web rebuilder listening on :8080` from the sidecar, and
 `initial build published: ...` from the initContainer's one-time run
-(`kubectl logs -n oneabobeall deployment/oneabobeall-web -c initial-build`,
+(`kubectl logs -n oneaboveall deployment/oneaboveall-web -c initial-build`,
 or `kubectl logs ... --previous` once the init container has exited). After
 the next round actually closes, the api logs
-(`kubectl logs -n oneabobeall deployment/oneabobeall-api`) should show no
+(`kubectl logs -n oneaboveall deployment/oneaboveall-api`) should show no
 `scheduler: failed to reach web rebuild trigger` errors around that time.
 
 ## Email (round-won / refund notifications)
@@ -205,24 +205,24 @@ planning: when that feature is built, send through Resend
 transactional emails, nothing needs to receive replies.
 
 To have the domain ready ahead of time: create a Resend account, add
-`oneabobeall.org` as a sending domain, and add the DNS records Resend gives
+`oneaboveall.org` as a sending domain, and add the DNS records Resend gives
 you (SPF/DKIM TXT records) at the same registrar as the A records above.
 That's a DNS/account setup step now; the actual sending code is a separate,
 later piece of work.
 
 ## Troubleshooting
 
-- **`kubectl rollout status` times out on `oneabobeall-api`**: check
-  `kubectl logs -n oneabobeall deployment/oneabobeall-api` — a missing or
+- **`kubectl rollout status` times out on `oneaboveall-api`**: check
+  `kubectl logs -n oneaboveall deployment/oneaboveall-api` — a missing or
   malformed env var (`STRIPE_SECRET_KEY`, `CORS_ORIGIN`,
   `GOOGLE_CLIENT_ID`, etc.) fails the process at boot with a clear error
   naming the var (see `server.ts`, `stripeClient.ts`, `authGoogle.ts`'s own
   `requireEnv` checks) rather than crash-looping silently.
-- **TLS cert never issues**: `kubectl describe certificate oneabobeall-tls -n
-  oneabobeall` and `kubectl get challenges -n oneabobeall` — almost always
+- **TLS cert never issues**: `kubectl describe certificate oneaboveall-tls -n
+  oneaboveall` and `kubectl get challenges -n oneaboveall` — almost always
   DNS not yet propagated, or the ClusterIssuer name mismatch from step 2
   above.
 - **Photo uploads or the Apple key disappear after a redeploy**: they
-  shouldn't — `api-uploads-pvc` and the `oneabobeall-apple-key` Secret both
+  shouldn't — `api-uploads-pvc` and the `oneaboveall-apple-key` Secret both
   persist across `deploy.sh` runs. If `api-uploads-pvc` itself is deleted,
   its photos are gone; that PVC is not backed up anywhere.

@@ -38,7 +38,7 @@ describe("GET /auth/me", () => {
     const { token } = await createSession(user.id);
 
     const app = buildServer();
-    const response = await app.inject({ method: "GET", url: "/auth/me", headers: { cookie: `oneabobeall_session=${token}` } });
+    const response = await app.inject({ method: "GET", url: "/auth/me", headers: { cookie: `oneaboveall_session=${token}` } });
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ id: user.id, email: "a@example.com", name: "A" });
@@ -60,7 +60,7 @@ describe("PATCH /auth/email", () => {
     const response = await app.inject({
       method: "PATCH",
       url: "/auth/email",
-      headers: { cookie: `oneabobeall_session=${token}` },
+      headers: { cookie: `oneaboveall_session=${token}` },
       payload: { email: "new@example.com" },
     });
 
@@ -79,7 +79,7 @@ describe("PATCH /auth/email", () => {
     const response = await app.inject({
       method: "PATCH",
       url: "/auth/email",
-      headers: { cookie: `oneabobeall_session=${token}` },
+      headers: { cookie: `oneaboveall_session=${token}` },
       payload: { email: "not-an-email" },
     });
 
@@ -96,7 +96,7 @@ describe("PATCH /auth/email", () => {
     const response = await app.inject({
       method: "PATCH",
       url: "/auth/email",
-      headers: { cookie: `oneabobeall_session=${token}` },
+      headers: { cookie: `oneaboveall_session=${token}` },
       payload: {},
     });
 
@@ -119,7 +119,7 @@ describe("PATCH /auth/social", () => {
     const response = await app.inject({
       method: "PATCH",
       url: "/auth/social",
-      headers: { cookie: `oneabobeall_session=${token}` },
+      headers: { cookie: `oneaboveall_session=${token}` },
       // Not Instagram — the whole point is that any social network (or
       // personal site) is accepted, not just one platform.
       payload: { socialUrl: "https://x.com/someone" },
@@ -139,7 +139,7 @@ describe("PATCH /auth/social", () => {
     const response = await app.inject({
       method: "PATCH",
       url: "/auth/social",
-      headers: { cookie: `oneabobeall_session=${token}` },
+      headers: { cookie: `oneaboveall_session=${token}` },
       payload: { socialUrl: "" },
     });
 
@@ -157,7 +157,7 @@ describe("PATCH /auth/social", () => {
     const response = await app.inject({
       method: "PATCH",
       url: "/auth/social",
-      headers: { cookie: `oneabobeall_session=${token}` },
+      headers: { cookie: `oneaboveall_session=${token}` },
       payload: { socialUrl: "not a url" },
     });
 
@@ -176,7 +176,7 @@ describe("PATCH /auth/social", () => {
     const response = await app.inject({
       method: "PATCH",
       url: "/auth/social",
-      headers: { cookie: `oneabobeall_session=${token}` },
+      headers: { cookie: `oneaboveall_session=${token}` },
       payload: { socialUrl: "javascript:alert(1)" },
     });
 
@@ -199,7 +199,7 @@ describe("PATCH /auth/character-request", () => {
     const response = await app.inject({
       method: "PATCH",
       url: "/auth/character-request",
-      headers: { cookie: `oneabobeall_session=${token}` },
+      headers: { cookie: `oneaboveall_session=${token}` },
       payload: { characterRequest: "Black suit, gold trim, confident pose." },
     });
 
@@ -220,7 +220,7 @@ describe("PATCH /auth/character-request", () => {
     const response = await app.inject({
       method: "PATCH",
       url: "/auth/character-request",
-      headers: { cookie: `oneabobeall_session=${token}` },
+      headers: { cookie: `oneaboveall_session=${token}` },
       payload: { characterRequest: "" },
     });
 
@@ -241,7 +241,7 @@ describe("PATCH /auth/character-request", () => {
     const response = await app.inject({
       method: "PATCH",
       url: "/auth/character-request",
-      headers: { cookie: `oneabobeall_session=${token}` },
+      headers: { cookie: `oneaboveall_session=${token}` },
       payload: { characterRequest: "x".repeat(501) },
     });
 
@@ -266,7 +266,7 @@ describe("PATCH /auth/name", () => {
     const response = await app.inject({
       method: "PATCH",
       url: "/auth/name",
-      headers: { cookie: `oneabobeall_session=${token}` },
+      headers: { cookie: `oneaboveall_session=${token}` },
       payload: { name: "  New Name  " },
     });
 
@@ -284,7 +284,7 @@ describe("PATCH /auth/name", () => {
     const response = await app.inject({
       method: "PATCH",
       url: "/auth/name",
-      headers: { cookie: `oneabobeall_session=${token}` },
+      headers: { cookie: `oneaboveall_session=${token}` },
       payload: { name: "   " },
     });
 
@@ -301,7 +301,7 @@ describe("PATCH /auth/name", () => {
     const response = await app.inject({
       method: "PATCH",
       url: "/auth/name",
-      headers: { cookie: `oneabobeall_session=${token}` },
+      headers: { cookie: `oneaboveall_session=${token}` },
       payload: { name: "x".repeat(81) },
     });
 
@@ -315,7 +315,7 @@ describe("POST /auth/logout", () => {
     const { token } = await createSession(user.id);
 
     const app = buildServer();
-    const response = await app.inject({ method: "POST", url: "/auth/logout", headers: { cookie: `oneabobeall_session=${token}` } });
+    const response = await app.inject({ method: "POST", url: "/auth/logout", headers: { cookie: `oneaboveall_session=${token}` } });
 
     expect(response.statusCode).toBe(200);
     const rows = await db.select().from(sessions).where(eq(sessions.token, token));
