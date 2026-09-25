@@ -14,7 +14,7 @@ function mockFetch(handlers: {
   me?: unknown;
   round?: unknown;
   participation?: unknown;
-  leaderboard?: unknown[];
+  history?: unknown[];
   logoutOk?: boolean;
   patchEmailOk?: boolean;
 }) {
@@ -39,8 +39,8 @@ function mockFetch(handlers: {
     if (path.match(/^\/rounds\/.+\/me$/)) {
       return { ok: true, status: 200, json: async () => handlers.participation };
     }
-    if (path === "/leaderboard") {
-      return { ok: true, status: 200, json: async () => handlers.leaderboard ?? [] };
+    if (path === "/me/history") {
+      return { ok: true, status: 200, json: async () => ({ history: handlers.history ?? [] }) };
     }
     throw new Error(`unexpected fetch: ${url}`);
   });
@@ -80,7 +80,7 @@ describe("UserBadge", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Alex — action needed" })).toBeInTheDocument());
   });
 
-  it("opens the settings sidebar on click, showing identity and the real leaderboard", async () => {
+  it("opens the settings sidebar on click, showing identity and the real history", async () => {
     global.fetch = mockFetch({ me: { id: "u1", email: "alex@example.com", name: "Alex" } }) as unknown as typeof fetch;
     render(<UserBadge apiBaseUrl="http://api.test" />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Alex" })).toBeInTheDocument());
@@ -89,9 +89,9 @@ describe("UserBadge", () => {
 
     expect(screen.getByRole("dialog", { name: /account settings/i })).toBeInTheDocument();
     expect(screen.getByText("alex@example.com")).toBeInTheDocument();
-    // LeaderboardTable's own empty-state copy — confirms the real component
-    // is embedded, not a link out to a page.
-    await waitFor(() => expect(screen.getByText(/no completed reigns yet/i)).toBeInTheDocument());
+    // HistoryTable's own empty-state copy — confirms the real component is
+    // embedded, not a link out to a page.
+    await waitFor(() => expect(screen.getByText(/no activity yet/i)).toBeInTheDocument());
   });
 
   it("closes the sidebar via the Close button", async () => {
@@ -161,7 +161,7 @@ describe("UserBadge — post-signup email confirmation", () => {
       }),
     );
     await waitFor(() => expect(screen.getByText("Settings")).toBeInTheDocument());
-    await waitFor(() => expect(screen.getByText(/no completed reigns yet/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/no activity yet/i)).toBeInTheDocument());
   });
 
   it("does not show the email-confirm step on an ordinary sign-in (no ?welcome=1)", async () => {

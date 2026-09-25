@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import LeaderboardTable from "./LeaderboardTable";
+import HistoryTable from "./HistoryTable";
 
 type SessionUser = { id: string; email: string; name: string };
 
@@ -138,11 +138,12 @@ function EmailConfirmStep({
  * vast majority of visitors.
  *
  * Signed in, it shows an initial-letter avatar that opens a right-side
- * settings sidebar — account identity, the leaderboard, and sign out — over
- * whatever page you're already on. The actual bid/deposit flow lives
- * elsewhere now (AuctionFlow's own Displace button opens BidFlow.tsx
- * directly), not in this sidebar — this one is just account settings plus
- * a read-only leaderboard.
+ * settings sidebar — account identity, this user's own bid history
+ * (HistoryTable.tsx), and sign out — over whatever page you're already on.
+ * The actual bid/deposit flow lives elsewhere now (AuctionFlow's own
+ * Displace button opens BidFlow.tsx directly), not in this sidebar. The
+ * public leaderboard is a separate thing entirely, reachable from the
+ * homepage's own Leaderboard chip — this sidebar doesn't duplicate it.
  *
  * Also handles the one-time post-signup email-confirmation step (the
  * `?welcome=1` the OAuth callbacks redirect new signups to), and the
@@ -317,11 +318,11 @@ export default function UserBadge({ apiBaseUrl }: { apiBaseUrl: string }) {
                 </div>
 
                 <div style={{ marginTop: 20, fontSize: 9, letterSpacing: ".28em", textTransform: "uppercase", color: "var(--gold)", padding: "0 20px" }}>
-                  Leaderboard
+                  History
                 </div>
 
                 <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
-                  <LeaderboardTable apiBaseUrl={apiBaseUrl} />
+                  <HistoryTable apiBaseUrl={apiBaseUrl} />
                 </div>
 
                 <div style={{ padding: 20, borderTop: "1px solid var(--line)" }}>
