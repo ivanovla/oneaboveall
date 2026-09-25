@@ -9,3 +9,12 @@ import { cleanup } from "@testing-library/react";
 afterEach(() => {
   cleanup();
 });
+
+// jsdom implements neither — PhotoUploader (and anything else previewing a
+// freshly-selected File) calls both on every file selection.
+if (typeof URL.createObjectURL !== "function") {
+  URL.createObjectURL = () => "blob:mock-url";
+}
+if (typeof URL.revokeObjectURL !== "function") {
+  URL.revokeObjectURL = () => {};
+}

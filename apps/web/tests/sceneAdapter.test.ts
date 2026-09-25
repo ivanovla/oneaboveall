@@ -45,6 +45,31 @@ describe("adaptScene", () => {
     expect(scene.champion.occupantId).toBe("3f2b8c4e-9d01-4a7b-bd3c-1f1b0a2c9e77");
   });
 
+  it("maps socialUrl through for the champion and retinue, undefined when the API omits or nulls it", () => {
+    const api: ApiSceneResponse = {
+      champion: {
+        occupantId: "mark-vilensky",
+        priceCents: 421_000,
+        since: "2026-08-09T10:20:00.000Z",
+        socialUrl: "https://x.com/mark",
+      },
+      retinue: [
+        {
+          occupantId: "daniel-crowe",
+          priceCents: 398_000,
+          startedAt: "2026-08-08T00:00:00.000Z",
+          endedAt: "2026-08-09T00:00:00.000Z",
+          socialUrl: null,
+        },
+      ],
+    };
+
+    const scene = adaptScene(api)!;
+
+    expect(scene.champion.socialUrl).toBe("https://x.com/mark");
+    expect(scene.retinue[0].socialUrl).toBeUndefined();
+  });
+
   it("falls back to occupantId when the API omits or empties occupantName", () => {
     const api: ApiSceneResponse = {
       champion: { occupantId: "bootstrap-champ", priceCents: 421_000, since: "2026-08-09T10:20:00.000Z" },

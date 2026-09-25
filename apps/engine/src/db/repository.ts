@@ -1,12 +1,11 @@
-import { and, desc, asc, eq, gt, lte, isNull } from "drizzle-orm";
+import { and, desc, asc, eq, lte, isNull } from "drizzle-orm";
 import { db } from "./client";
-import { reigns, rounds, bids, bans, roundParticipants } from "./schema";
+import { reigns, rounds, bids } from "./schema";
 import { validateBidAmount } from "../domain/bidValidation";
 
 export type Reign = typeof reigns.$inferSelect;
 export type Round = typeof rounds.$inferSelect;
 export type Bid = typeof bids.$inferSelect;
-export type RoundParticipant = typeof roundParticipants.$inferSelect;
 
 export async function getCurrentReign(): Promise<Reign | null> {
   const [reign] = await db.select().from(reigns).where(isNull(reigns.endedAt)).limit(1);
@@ -26,9 +25,13 @@ export async function getLatestRound(reignId: string): Promise<Round | null> {
 export async function getQueueLeader(roundId: string, asOf?: Date): Promise<Bid | null> {
   // `asOf` (optional, no time filter by default) restricts the queue to bids
   // placed at or before that instant. The bidding-phase snapshot passes the
-  // window's close time so that a bid which somehow slipped past placeBid's
-  // window guard can never win the snapshot.
-  const where = asOf ? and(eq(bids.roundId, roundId), lte(bids.placedAt, asOf)) : eq(bids.roundId, roundId);
+  // window's close time so that a bid which somehow slipped past the window
+  // guard can never win the snapshot. A refunded (outbid) bid is never a
+  // candidate leader — only the one still-unrefunded bid in a round (if any)
+  // can be.
+  const where = asOf
+    ? and(eq(bids.roundId, roundId), isNull(bids.refundedAt), lte(bids.placedAt, asOf))
+    : and(eq(bids.roundId, roundId), isNull(bids.refundedAt));
   const [top] = await db
     .select()
     .from(bids)
@@ -39,8 +42,8 @@ export async function getQueueLeader(roundId: string, asOf?: Date): Promise<Bid 
 }
 
 // This bidder's own highest bid in the round, independent of who's
-// currently leading. Used to distinguish "never bid" from "bid but got
-// outbid" — getQueueLeader alone can't tell those apart.
+// currently leading (and regardless of whether it was later outbid and
+// refunded). Used to distinguish "never bid" from "bid but got outbid".
 export async function getBidderTopBid(roundId: string, bidderId: string): Promise<Bid | null> {
   const [top] = await db
     .select()
@@ -51,125 +54,125 @@ export async function getBidderTopBid(roundId: string, bidderId: string): Promis
   return top ?? null;
 }
 
-export async function getRoundParticipant(roundId: string, bidderId: string): Promise<RoundParticipant | null> {
-  const [row] = await db
-    .select()
-    .from(roundParticipants)
-    .where(and(eq(roundParticipants.roundId, roundId), eq(roundParticipants.bidderId, bidderId)))
-    .limit(1);
-  return row ?? null;
-}
-
 export type BidderHistoryEntry = {
   roundId: string;
-  depositCents: number;
-  depositStatus: RoundParticipant["depositStatus"];
-  joinedAt: Date;
-  bids: { amountCents: number; placedAt: Date }[];
+  bids: { amountCents: number; placedAt: Date; status: "active" | "won" | "refunded" }[];
 };
 
-// Every round this bidder ever joined, most recent first, each with their
-// own bids in that round (not the round's overall leader — this is a
-// personal activity history, not a leaderboard). `depositStatus` alone
-// tells the outcome: "applied" won, "refunded" lost fairly, "forfeited"
-// won but failed to pay the remainder, "held" still in progress.
+// Every round this bidder ever placed a bid in, most recent bid first, each
+// with all of their own bids in that round (not the round's overall leader —
+// this is a personal activity history, not a leaderboard). A bid's own
+// status tells the outcome directly: "refunded" means a later bid (by
+// someone else) outbid it and the money already came back; "active" means
+// it's still the unrefunded leader of a round still in progress; "won" means
+// it's still unrefunded and the round has closed — i.e. it's the winning bid.
 //
-// One query per round rather than a single joined query — deliberately:
-// a bidder's total round count is small (rounds are ~daily), so the join's
+// One query per round rather than a single joined query — deliberately: a
+// bidder's total round count is small (rounds are ~daily), so the join's
 // added complexity isn't worth it for what stays a handful of round-trips.
 export async function getBidderHistory(bidderId: string): Promise<BidderHistoryEntry[]> {
-  const participantRows = await db
+  const ownBids = await db
     .select()
-    .from(roundParticipants)
-    .where(eq(roundParticipants.bidderId, bidderId))
-    .orderBy(desc(roundParticipants.joinedAt));
+    .from(bids)
+    .where(eq(bids.bidderId, bidderId))
+    .orderBy(desc(bids.placedAt));
 
-  const entries: BidderHistoryEntry[] = [];
-  for (const row of participantRows) {
-    const bidRows = await db
-      .select({ amountCents: bids.amountCents, placedAt: bids.placedAt })
-      .from(bids)
-      .where(and(eq(bids.roundId, row.roundId), eq(bids.bidderId, bidderId)))
-      .orderBy(desc(bids.placedAt));
-    entries.push({
-      roundId: row.roundId,
-      depositCents: row.depositCents,
-      depositStatus: row.depositStatus,
-      joinedAt: row.joinedAt,
-      bids: bidRows,
-    });
+  const roundIds = [...new Set(ownBids.map((b) => b.roundId))];
+  const roundPhaseById = new Map<string, Round["phase"]>();
+  for (const roundId of roundIds) {
+    const [round] = await db.select().from(rounds).where(eq(rounds.id, roundId)).limit(1);
+    if (round) roundPhaseById.set(roundId, round.phase);
   }
-  return entries;
-}
 
-export async function isBanned(bidderId: string, now: Date): Promise<boolean> {
-  const [row] = await db
-    .select()
-    .from(bans)
-    .where(and(eq(bans.bidderId, bidderId), gt(bans.bannedUntil, now)))
-    .limit(1);
-  return !!row;
+  const entriesByRound = new Map<string, BidderHistoryEntry>();
+  for (const bid of ownBids) {
+    const status: "active" | "won" | "refunded" = bid.refundedAt
+      ? "refunded"
+      : roundPhaseById.get(bid.roundId) === "closed"
+        ? "won"
+        : "active";
+    const entry = entriesByRound.get(bid.roundId) ?? { roundId: bid.roundId, bids: [] };
+    entry.bids.push({ amountCents: bid.amountCents, placedAt: bid.placedAt, status });
+    entriesByRound.set(bid.roundId, entry);
+  }
+
+  // Preserve "most recent round first" ordering — entriesByRound iteration
+  // order follows first-insertion, and ownBids is already newest-bid-first.
+  return [...entriesByRound.values()];
 }
 
 const SERIALIZATION_FAILURE = "40001";
+const UNIQUE_VIOLATION = "23505";
 
-export async function placeBidAtomic(params: {
+// The authoritative post-payment record of a bid: this bidder's Stripe charge
+// for the full amount already succeeded (that's why this function is being
+// called at all — from the payment_intent.succeeded webhook), so what's left
+// is purely bookkeeping: verify the round will still accept it, verify it
+// still beats the current leader, and if a previous leader is displaced,
+// report who so the caller can refund them (refunding is an external side
+// effect the caller performs — this function's own job is limited to the DB
+// transaction).
+export async function recordBidAtomic(params: {
   roundId: string;
   bidderId: string;
   amountCents: number;
-  // When omitted the column's DEFAULT now() (the database clock) is used.
-  // placeBid passes its own `now` so that a bid's placedAt agrees with the
-  // instant the bidding-window guard was evaluated against — the snapshot's
-  // `asOf` filter compares the two.
+  paymentRef: string;
   placedAt?: Date;
   onRetry?: () => void;
-}): Promise<{ ok: true; bid: Bid } | { ok: false; reason: string }> {
+}): Promise<
+  | { outcome: "recorded"; bid: Bid; displacedBid: Bid | null }
+  | { outcome: "already-recorded" }
+  | { outcome: "rejected"; reason: string }
+> {
   const maxAttempts = 5;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       return await db.transaction(
         async (tx) => {
+          const [existing] = await tx.select().from(bids).where(eq(bids.paymentRef, params.paymentRef)).limit(1);
+          if (existing) return { outcome: "already-recorded" as const };
+
           const [round] = await tx.select().from(rounds).where(eq(rounds.id, params.roundId)).limit(1);
-          if (!round) return { ok: false, reason: "Round not found." };
-          if (round.phase !== "bidding") return { ok: false, reason: "Round is not accepting bids." };
+          if (!round) return { outcome: "rejected" as const, reason: "Round not found." };
+          if (round.phase !== "bidding") return { outcome: "rejected" as const, reason: "Round is not accepting bids." };
 
           const [reign] = await tx.select().from(reigns).where(eq(reigns.id, round.reignId)).limit(1);
-          if (!reign) return { ok: false, reason: "Reign not found." };
-
-          // Authoritative check: fast-path duplicate of this lives in placeBid.ts,
-          // but this is the one that actually guards correctness inside the
-          // transaction, same rationale as the amount/phase checks above it.
-          const [participant] = await tx
-            .select()
-            .from(roundParticipants)
-            .where(and(eq(roundParticipants.roundId, params.roundId), eq(roundParticipants.bidderId, params.bidderId)))
-            .limit(1);
-          if (!participant || participant.depositStatus !== "held") {
-            return { ok: false, reason: "Join this round (pay the deposit) before placing a bid." };
-          }
+          if (!reign) return { outcome: "rejected" as const, reason: "Reign not found." };
 
           const [topBid] = await tx
             .select()
             .from(bids)
-            .where(eq(bids.roundId, params.roundId))
+            .where(and(eq(bids.roundId, params.roundId), isNull(bids.refundedAt)))
             .orderBy(desc(bids.amountCents), asc(bids.placedAt))
             .limit(1);
 
+          if (topBid && topBid.bidderId === params.bidderId) {
+            return { outcome: "rejected" as const, reason: "You are already the current leader — wait to be outbid before raising your own bid." };
+          }
+
           const currentLeaderCents = topBid ? topBid.amountCents : reign.priceCents;
           const validation = validateBidAmount(params.amountCents, currentLeaderCents);
-          if (!validation.valid) return { ok: false, reason: validation.reason };
+          if (!validation.valid) return { outcome: "rejected" as const, reason: validation.reason };
 
-          const [inserted] = await tx
-            .insert(bids)
-            .values({
-              roundId: params.roundId,
-              bidderId: params.bidderId,
-              amountCents: params.amountCents,
-              ...(params.placedAt ? { placedAt: params.placedAt } : {}),
-            })
-            .returning();
+          let inserted: Bid;
+          try {
+            const rows = await tx
+              .insert(bids)
+              .values({
+                roundId: params.roundId,
+                bidderId: params.bidderId,
+                amountCents: params.amountCents,
+                paymentRef: params.paymentRef,
+                ...(params.placedAt ? { placedAt: params.placedAt } : {}),
+              })
+              .returning();
+            inserted = rows[0];
+          } catch (err: any) {
+            if (err?.code === UNIQUE_VIOLATION) return { outcome: "already-recorded" as const };
+            throw err;
+          }
 
-          return { ok: true, bid: inserted };
+          return { outcome: "recorded" as const, bid: inserted, displacedBid: topBid ?? null };
         },
         { isolationLevel: "serializable" },
       );
@@ -181,5 +184,5 @@ export async function placeBidAtomic(params: {
       throw err;
     }
   }
-  throw new Error("placeBidAtomic: exceeded retry attempts under serialization conflict");
+  throw new Error("recordBidAtomic: exceeded retry attempts under serialization conflict");
 }

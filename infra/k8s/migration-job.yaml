@@ -1,0 +1,30 @@
+# Applies the current schema (apps/engine/src/db/schema.ts) to the prod
+# database via `drizzle-kit push` — this project has no migrations
+# directory, schema changes are always applied by push (see how the
+# social_url rename and character_request column were rolled out during
+# development). Reuses the api image: it already has engine's
+# devDependencies installed (drizzle-kit included — see
+# infra/docker/api.Dockerfile), so no separate image is needed.
+#
+# deploy.sh applies this with `envsubst` for IMAGE_TAG, then waits for
+# completion before rolling out the api/web Deployments — never run the app
+# against a schema it doesn't match yet.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: oneabobeall-migrate-${IMAGE_TAG}
+  namespace: oneabobeall
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: oneabobeall-api:${IMAGE_TAG}
+          imagePullPolicy: Never
+          workingDir: /app/apps/engine
+          command: ["npx", "drizzle-kit", "push", "--force"]
+          envFrom:
+            - secretRef:
+                name: oneabobeall-secrets

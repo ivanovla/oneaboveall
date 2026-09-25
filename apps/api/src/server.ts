@@ -8,7 +8,6 @@ import secureJson from "secure-json-parse";
 import { registerSceneRoute } from "./routes/scene";
 import { registerLeaderboardRoute } from "./routes/leaderboard";
 import { registerCurrentRoundRoute } from "./routes/currentRound";
-import { registerJoinRoundRoute } from "./routes/joinRound";
 import { registerPlaceBidRoute } from "./routes/placeBid";
 import { registerRoundParticipationRoute } from "./routes/roundParticipation";
 import { registerStripeWebhookRoute } from "./routes/stripeWebhook";
@@ -143,13 +142,12 @@ export function buildServer(): FastifyInstance {
   if (!STRIPE_WEBHOOK_SECRET) {
     throw new Error("STRIPE_WEBHOOK_SECRET is required.");
   }
-  const stripeProvider = new StripePaymentProvider(stripe, STRIPE_CURRENCY);
+  const stripeProvider = new StripePaymentProvider(stripe);
 
   registerSceneRoute(app);
   registerLeaderboardRoute(app);
   registerCurrentRoundRoute(app);
-  registerJoinRoundRoute(app, stripe, STRIPE_CURRENCY);
-  registerPlaceBidRoute(app);
+  registerPlaceBidRoute(app, stripe, STRIPE_CURRENCY);
   registerRoundParticipationRoute(app);
   registerStripeWebhookRoute(app, stripe, STRIPE_WEBHOOK_SECRET, stripeProvider);
   registerGoogleAuthRoutes(app);
@@ -157,6 +155,13 @@ export function buildServer(): FastifyInstance {
   registerAuthMeRoutes(app);
   registerPhotoRoutes(app);
   registerHistoryRoute(app);
+
+  // Liveness/readiness target for the k8s Deployment (see
+  // infra/k8s/api.yaml). Deliberately does not touch the database — this
+  // answers "is the process alive and accepting connections", the same
+  // question a TCP probe would ask; DB reachability already surfaces through
+  // every real route's own error handling instead of gating pod readiness.
+  app.get("/healthz", async () => ({ ok: true }));
 
   return app;
 }

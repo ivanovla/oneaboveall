@@ -1,0 +1,101 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: api-uploads-pvc
+  namespace: oneabobeall
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oneabobeall-api
+  namespace: oneabobeall
+spec:
+  # Single replica: api-uploads-pvc is ReadWriteOnce (local-path has no
+  # ReadWriteMany), so a second replica couldn't mount it. The scheduler's
+  # round-resolution is already safe under multiple instances regardless
+  # (claim-before-close — see apps/engine/src/engine/roundResolution.ts) —
+  # this limit is purely about the uploads volume, not correctness, so
+  # raising it later needs a shared file store, not a code change.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oneabobeall-api
+  template:
+    metadata:
+      labels:
+        app: oneabobeall-api
+    spec:
+      containers:
+        - name: api
+          image: oneabobeall-api:${IMAGE_TAG}
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 3001
+          env:
+            - name: HOST
+              value: "0.0.0.0"
+            - name: PORT
+              value: "3001"
+            # In-cluster address of the web rebuilder sidecar's internal
+            # endpoint (see web.yaml) — not exposed through the Ingress.
+            - name: WEB_REBUILD_URL
+              value: "http://oneabobeall-web:8080/rebuild"
+          envFrom:
+            - secretRef:
+                name: oneabobeall-secrets
+          volumeMounts:
+            - name: uploads
+              mountPath: /app/apps/api/uploads
+            - name: apple-key
+              mountPath: /app/apps/api/apple-private-key.p8
+              subPath: apple-private-key.p8
+              readOnly: true
+          resources:
+            requests:
+              memory: "192Mi"
+              cpu: "100m"
+            limits:
+              memory: "384Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 3001
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 3001
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 2
+      volumes:
+        - name: uploads
+          persistentVolumeClaim:
+            claimName: api-uploads-pvc
+        - name: apple-key
+          secret:
+            secretName: oneabobeall-apple-key
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oneabobeall-api
+  namespace: oneabobeall
+spec:
+  selector:
+    app: oneabobeall-api
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 3001

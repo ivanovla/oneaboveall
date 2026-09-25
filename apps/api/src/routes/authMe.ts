@@ -12,11 +12,29 @@ import { eq } from "drizzle-orm";
 // which nothing here can check synchronously anyway.
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// Deliberately narrow to Instagram profile URLs specifically (not "any
-// URL") to match what the champion card actually renders as a link label —
-// broadening this to arbitrary social links is a real future need, not
-// solved here.
-const INSTAGRAM_URL_RE = /^https:\/\/(www\.)?instagram\.com\/[A-Za-z0-9_.]+\/?$/;
+// Deliberately not restricted to one platform — this can be a link to any
+// social network (Instagram, X, TikTok, a personal site, …), or omitted
+// entirely. The only real bar is that it's a genuine http(s) URL: an
+// unvalidated string ends up in an `href` on the public champion card (see
+// Scene.astro), and a scheme like `javascript:` there would execute on
+// click.
+function isValidSocialUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+// Loose on purpose — this is a display label, not an identity, so the only
+// real bars are "not empty" and "not absurdly long" (the champion card has
+// finite room for it).
+const MAX_NAME_LENGTH = 80;
+
+// A free-text description, not a structured field — generous but still
+// bounded so a photo upload can't be paired with an unbounded blob.
+const MAX_CHARACTER_REQUEST_LENGTH = 500;
 
 export function registerAuthMeRoutes(app: FastifyInstance): void {
   app.get("/auth/me", async (request, reply) => {
@@ -48,26 +66,67 @@ export function registerAuthMeRoutes(app: FastifyInstance): void {
     return { id: user.id, email, name: user.name };
   });
 
-  // Optional — lets a signed-in user attach (or, with an empty string,
-  // clear) an Instagram profile link, shown alongside their photo once
-  // they're the reigning champion. Never required to finish the
-  // photo/social step in the frontend flow.
-  app.patch<{ Body: { instagramUrl?: unknown } }>("/auth/social", async (request, reply) => {
+  // Lets a signed-in user set (or correct) the name shown publicly for them
+  // — the champion banner, the scene tooltip, and the leaderboard all render
+  // `users.name` (see engine/queries/publicScene.ts's `displayName`).
+  // Google/Apple seed it at sign-up, but a user may want something else
+  // shown than their real OAuth name.
+  app.patch<{ Body: { name?: unknown } }>("/auth/name", async (request, reply) => {
     const user = await requireSession(request, reply);
     if (!user) return;
 
-    const instagramUrl = request.body?.instagramUrl;
-    if (instagramUrl === "") {
-      await db.update(users).set({ instagramUrl: null }).where(eq(users.id, user.id));
-      return { instagramUrl: null };
-    }
-    if (typeof instagramUrl !== "string" || !INSTAGRAM_URL_RE.test(instagramUrl)) {
+    const name = typeof request.body?.name === "string" ? request.body.name.trim() : "";
+    if (!name || name.length > MAX_NAME_LENGTH) {
       reply.code(400);
-      return { error: "a valid Instagram profile URL is required" };
+      return { error: `a name between 1 and ${MAX_NAME_LENGTH} characters is required` };
     }
 
-    await db.update(users).set({ instagramUrl }).where(eq(users.id, user.id));
-    return { instagramUrl };
+    await db.update(users).set({ name }).where(eq(users.id, user.id));
+    return { id: user.id, name };
+  });
+
+  // Optional — lets a signed-in user attach (or, with an empty string,
+  // clear) a link to any social network profile, shown alongside their
+  // photo once they're the reigning champion. Never required to finish the
+  // photo/social step in the frontend flow.
+  app.patch<{ Body: { socialUrl?: unknown } }>("/auth/social", async (request, reply) => {
+    const user = await requireSession(request, reply);
+    if (!user) return;
+
+    const socialUrl = request.body?.socialUrl;
+    if (socialUrl === "") {
+      await db.update(users).set({ socialUrl: null }).where(eq(users.id, user.id));
+      return { socialUrl: null };
+    }
+    if (typeof socialUrl !== "string" || !isValidSocialUrl(socialUrl)) {
+      reply.code(400);
+      return { error: "a valid URL is required" };
+    }
+
+    await db.update(users).set({ socialUrl }).where(eq(users.id, user.id));
+    return { socialUrl };
+  });
+
+  // Optional — captured alongside the photo upload (see POST /auth/photo):
+  // a freeform description of how this bidder would like their character
+  // rendered in the scene (clothing, style, mood, …). This codebase never
+  // parses or acts on it; it's for whoever composes the scene art.
+  app.patch<{ Body: { characterRequest?: unknown } }>("/auth/character-request", async (request, reply) => {
+    const user = await requireSession(request, reply);
+    if (!user) return;
+
+    const characterRequest = request.body?.characterRequest;
+    if (characterRequest === "") {
+      await db.update(users).set({ characterRequest: null }).where(eq(users.id, user.id));
+      return { characterRequest: null };
+    }
+    if (typeof characterRequest !== "string" || characterRequest.length > MAX_CHARACTER_REQUEST_LENGTH) {
+      reply.code(400);
+      return { error: `a description under ${MAX_CHARACTER_REQUEST_LENGTH} characters is required` };
+    }
+
+    await db.update(users).set({ characterRequest }).where(eq(users.id, user.id));
+    return { characterRequest };
   });
 
   app.post("/auth/logout", async (request, reply) => {

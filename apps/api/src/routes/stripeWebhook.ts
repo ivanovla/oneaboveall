@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type Stripe from "stripe";
-import { joinRound } from "engine/engine/joinRound";
+import { recordBid } from "engine/engine/recordBid";
 import type { PaymentProvider } from "engine/payments/PaymentProvider";
 
 export function registerStripeWebhookRoute(
@@ -43,62 +43,31 @@ export function registerStripeWebhookRoute(
       const intent = event.data.object as Stripe.PaymentIntent;
       const roundId = intent.metadata?.roundId;
       const bidderId = intent.metadata?.bidderId;
-      // Webhook payloads are never expanded, so payment_method arrives as a
-      // bare id string; tolerate the object form anyway so an expansion
-      // setting can never silently turn a collected deposit into a no-op.
-      const paymentMethodRef =
-        typeof intent.payment_method === "string" ? intent.payment_method : (intent.payment_method?.id ?? null);
-      // Same tolerance for the Customer: a webhook delivers a bare id string,
-      // but an expansion setting could turn it into an object.
-      const customerRef = typeof intent.customer === "string" ? intent.customer : (intent.customer?.id ?? null);
+      const amountCents = intent.metadata?.amountCents ? Number(intent.metadata.amountCents) : null;
 
-      if (intent.metadata?.kind !== "deposit" || !roundId || !bidderId) {
-        // Not a deposit PaymentIntent. The remainder off-session charge
-        // (StripePaymentProvider.chargeRemainderOffSession) also emits
-        // payment_intent.succeeded and deliberately carries no deposit
-        // marker — treating it as a deposit would pass joinRound a foreign
-        // depositRef, and its duplicate-join branch would refund the
-        // remainder we just collected. Ignoring it is the correct outcome.
-        // The `kind` marker is what makes this positive identification
-        // rather than an inference from which metadata keys happen to exist.
+      if (intent.metadata?.kind !== "bid" || !roundId || !bidderId || !amountCents) {
+        // Not a bid PaymentIntent — nothing else in this codebase creates
+        // PaymentIntents any more, but ignoring an unrecognized one is still
+        // the correct outcome rather than guessing at its shape. The `kind`
+        // marker is what makes this positive identification rather than an
+        // inference from which metadata keys happen to exist.
         request.log.info(
           { paymentIntentId: intent.id },
-          "stripe webhook: payment_intent.succeeded is not a deposit (no kind=deposit marker / round metadata), ignoring",
+          "stripe webhook: payment_intent.succeeded is not a bid (no kind=bid marker / metadata), ignoring",
         );
-      } else if (!paymentMethodRef || !customerRef) {
-        // A deposit was genuinely collected but we can't save the refs needed
-        // to charge the remainder later, so this bidder cannot be joined.
-        // Retrying won't fix a payload that simply lacks them — give the money
-        // straight back instead of logging and walking away, which would leave
-        // the charge with no participant row and therefore nothing to ever
-        // refund it. A throw from refund() is deliberately NOT swallowed: the
-        // resulting 500 is what makes Stripe redeliver and try again.
-        request.log.error(
-          { paymentIntentId: intent.id, roundId, bidderId, hasPaymentMethod: !!paymentMethodRef, hasCustomer: !!customerRef },
-          "stripe webhook: deposit succeeded but PaymentIntent lacks payment_method/customer; refunding, bidder not joined",
-        );
-        await provider.refund(intent.id);
       } else {
-        // joinRound is idempotent on (roundId, bidderId) via a DB unique
-        // constraint, so a Stripe redelivery of this same event is a safe
-        // no-op and needs no separate idempotency bookkeeping here. Any
-        // exception is intentionally left to propagate: a 500 is what makes
-        // Stripe redeliver, which is what a transient DB failure needs.
-        const result = await joinRound(
-          {
-            roundId,
-            bidderId,
-            depositCents: intent.amount,
-            depositRef: intent.id,
-            paymentMethodRef,
-            customerRef,
-            now: new Date(),
-          },
+        // recordBid is idempotent on paymentRef (the PaymentIntent id) via a
+        // DB unique constraint, so a Stripe redelivery of this same event is
+        // a safe no-op and needs no separate idempotency bookkeeping here.
+        // Any exception is intentionally left to propagate: a 500 is what
+        // makes Stripe redeliver, which is what a transient DB failure needs.
+        const result = await recordBid(
+          { roundId, bidderId, amountCents, paymentRef: intent.id, now: new Date() },
           provider,
         );
         request.log.info(
           { paymentIntentId: intent.id, roundId, bidderId, outcome: result.outcome },
-          "stripe webhook: deposit processed",
+          "stripe webhook: bid processed",
         );
       }
     }

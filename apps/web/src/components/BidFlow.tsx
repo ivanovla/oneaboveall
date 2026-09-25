@@ -3,12 +3,12 @@ import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-
 import { formatMoney } from "../lib/format";
 import { getStripe, stripeAppearance } from "../lib/stripe";
 import { toBidInputValue, toWholeDollarCents } from "../lib/bidInput";
+import PhotoUploader from "./PhotoUploader";
 
 type CurrentRoundInfo = {
   roundId: string;
-  phase: "bidding" | "resolving" | "payment" | "closed";
+  phase: "bidding" | "closed";
   currentLeaderCents: number;
-  depositCents: number;
   biddingClosesAt: string;
 } | null;
 
@@ -63,11 +63,10 @@ function redirectToSignedOut(): void {
 }
 
 /**
- * Mounted once a join PaymentIntent's `clientSecret` is in hand — confirms
- * the deposit, then polls `/rounds/:id/me` until the webhook-driven join
- * lands (it can arrive a moment after the client-side confirmation), then
- * hands control back to `onPaid` to submit the bid amount that triggered
- * the join in the first place.
+ * Mounted once a bid PaymentIntent's `clientSecret` is in hand — confirms
+ * the charge, then polls `/rounds/:id/me` until the webhook-driven bid lands
+ * (it can arrive a moment after the client-side confirmation) and this
+ * bidder shows up as the round's leader.
  */
 function PaymentStep({ apiBaseUrl, roundId, onPaid }: { apiBaseUrl: string; roundId: string; onPaid: () => void }) {
   const stripe = useStripe();
@@ -76,7 +75,7 @@ function PaymentStep({ apiBaseUrl, roundId, onPaid }: { apiBaseUrl: string; roun
   const [paymentConfirmed, setPaymentConfirmed] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function pollJoinStatus() {
+  async function pollBidStatus() {
     setSubmitting(true);
     setError(null);
     try {
@@ -87,7 +86,7 @@ function PaymentStep({ apiBaseUrl, roundId, onPaid }: { apiBaseUrl: string; roun
           return;
         }
         const data = await res.json();
-        if (data.joined) {
+        if (data.isLeading) {
           onPaid();
           return;
         }
@@ -97,8 +96,8 @@ function PaymentStep({ apiBaseUrl, roundId, onPaid }: { apiBaseUrl: string; roun
     } catch (err) {
       setError(
         err instanceof Error
-          ? `Couldn't check your join status (${err.message}) — your payment went through; try again in a moment.`
-          : "Couldn't check your join status — your payment went through; try again in a moment.",
+          ? `Couldn't check your bid status (${err.message}) — your payment went through; try again in a moment.`
+          : "Couldn't check your bid status — your payment went through; try again in a moment.",
       );
     }
     setSubmitting(false);
@@ -117,7 +116,7 @@ function PaymentStep({ apiBaseUrl, roundId, onPaid }: { apiBaseUrl: string; roun
     }
 
     setPaymentConfirmed(true);
-    await pollJoinStatus();
+    await pollBidStatus();
   }
 
   return (
@@ -125,7 +124,7 @@ function PaymentStep({ apiBaseUrl, roundId, onPaid }: { apiBaseUrl: string; roun
       <PaymentElement />
       {error && <div style={{ marginTop: 10, fontSize: 12, color: "var(--fg-dim)" }}>{error}</div>}
       {paymentConfirmed ? (
-        <button onClick={pollJoinStatus} disabled={submitting} style={primaryButtonStyle}>
+        <button onClick={pollBidStatus} disabled={submitting} style={primaryButtonStyle}>
           {submitting ? "Checking status…" : "Check status"}
         </button>
       ) : (
@@ -138,25 +137,42 @@ function PaymentStep({ apiBaseUrl, roundId, onPaid }: { apiBaseUrl: string; roun
 }
 
 /**
- * The unified Displace flow: type a bid, pay if this is the first bid this
- * round (join + deposit), or submit it as a free re-bid if already joined,
+ * The unified Displace flow: type a bid, pay the full amount immediately,
  * then a required photo and an optional Instagram link. One step at a time,
- * in the same overlay Displace already opens — no separate "join" step
- * shown to the visitor, even though the two API calls underneath are
- * unchanged (POST /rounds/:id/join, POST /bids).
+ * in the same overlay Displace already opens.
+ *
+ * There is no separate "join" step and no deposit — every bid is a real,
+ * full-amount charge the instant it's placed. If it's later outbid, the
+ * whole amount is refunded automatically. A bidder who is already the
+ * round's leader cannot raise their own bid (they have to be outbid by
+ * someone else first) — `isLeading` gates the amount step for that case.
  */
 export default function BidFlow({ apiBaseUrl, onDone }: { apiBaseUrl: string; onDone: () => void }) {
   const [step, setStep] = useState<Step>("amount");
   const [round, setRound] = useState<CurrentRoundInfo | "loading">("loading");
-  const [alreadyJoined, setAlreadyJoined] = useState<boolean | null>(null);
+  const [isLeading, setIsLeading] = useState<boolean | null>(null);
   const [bidValue, setBidValue] = useState("");
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [photoFile, setPhotoFile] = useState<File | null>(null);
-  const [photoError, setPhotoError] = useState<string | null>(null);
-  const [instagramUrl, setInstagramUrl] = useState("");
+  const [sessionUser, setSessionUser] = useState<{ id: string; photoPath: string | null; characterRequest: string | null } | null>(
+    null,
+  );
+  const [socialUrl, setSocialUrl] = useState("");
   const [socialError, setSocialError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${apiBaseUrl}/auth/me`, { credentials: "include" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { id: string; photoPath: string | null; characterRequest: string | null } | null) => {
+        if (!cancelled && data) setSessionUser({ id: data.id, photoPath: data.photoPath, characterRequest: data.characterRequest });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [apiBaseUrl]);
 
   useEffect(() => {
     let cancelled = false;
@@ -180,7 +196,7 @@ export default function BidFlow({ apiBaseUrl, onDone }: { apiBaseUrl: string; on
       }
       const meData = await meRes.json();
       if (cancelled) return;
-      setAlreadyJoined(!!meData.joined);
+      setIsLeading(!!meData.isLeading);
       // A pre-filled minimum (current price + $1) saves a first-time bidder
       // a trip to figure out what "you must beat this" even means in
       // dollars, matching AuctionFlow's original prefill behavior.
@@ -192,27 +208,8 @@ export default function BidFlow({ apiBaseUrl, onDone }: { apiBaseUrl: string; on
     };
   }, [apiBaseUrl]);
 
-  async function submitBidAmount(amountCents: number) {
-    const res = await fetch(`${apiBaseUrl}/bids`, {
-      method: "POST",
-      credentials: "include",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ amountCents }),
-    });
-    if (res.status === 401) {
-      redirectToSignedOut();
-      return false;
-    }
-    if (!res.ok) {
-      const data = await res.json();
-      setError(data.error ?? "Bid was rejected.");
-      return false;
-    }
-    return true;
-  }
-
   async function handleSubmitAmount() {
-    if (round === "loading" || !round || alreadyJoined === null) return;
+    if (round === "loading" || !round) return;
     const amountCents = toWholeDollarCents(bidValue);
     if (amountCents <= round.currentLeaderCents) {
       setError(`Your bid must be higher than ${formatMoney(round.currentLeaderCents)}.`);
@@ -222,20 +219,19 @@ export default function BidFlow({ apiBaseUrl, onDone }: { apiBaseUrl: string; on
     setSubmitting(true);
     setError(null);
     try {
-      if (alreadyJoined) {
-        const ok = await submitBidAmount(amountCents);
-        if (ok) setStep("photo");
-        return;
-      }
-
-      const res = await fetch(`${apiBaseUrl}/rounds/${round.roundId}/join`, { method: "POST", credentials: "include" });
+      const res = await fetch(`${apiBaseUrl}/bids`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ amountCents }),
+      });
       if (res.status === 401) {
         redirectToSignedOut();
         return;
       }
       if (!res.ok) {
         const data = await res.json();
-        setError(data.error ?? "Couldn't start the deposit — please try again.");
+        setError(data.error ?? "Couldn't start the payment — please try again.");
         return;
       }
       const data = await res.json();
@@ -248,42 +244,8 @@ export default function BidFlow({ apiBaseUrl, onDone }: { apiBaseUrl: string; on
     }
   }
 
-  async function handlePaid() {
-    if (round === "loading" || !round) return;
-    const amountCents = toWholeDollarCents(bidValue);
-    const ok = await submitBidAmount(amountCents);
-    if (ok) setStep("photo");
-  }
-
-  async function uploadPhoto() {
-    if (!photoFile) {
-      setPhotoError("Choose a photo first.");
-      return;
-    }
-    setSubmitting(true);
-    setPhotoError(null);
-    try {
-      const form = new FormData();
-      form.append("photo", photoFile);
-      // No content-type header set deliberately — the browser fills in
-      // multipart/form-data with the correct boundary itself; setting it
-      // by hand would drop that boundary and break the upload.
-      const res = await fetch(`${apiBaseUrl}/auth/photo`, { method: "POST", credentials: "include", body: form });
-      if (res.status === 401) {
-        redirectToSignedOut();
-        return;
-      }
-      if (!res.ok) {
-        const data = await res.json();
-        setPhotoError(data.error ?? "Couldn't upload that photo — please try again.");
-        return;
-      }
-      setStep("social");
-    } catch (err) {
-      setPhotoError(err instanceof Error ? err.message : "Couldn't upload that photo — please try again.");
-    } finally {
-      setSubmitting(false);
-    }
+  function handlePaid() {
+    setStep("photo");
   }
 
   async function saveSocial() {
@@ -294,7 +256,7 @@ export default function BidFlow({ apiBaseUrl, onDone }: { apiBaseUrl: string; on
         method: "PATCH",
         credentials: "include",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ instagramUrl }),
+        body: JSON.stringify({ socialUrl }),
       });
       if (res.status === 401) {
         redirectToSignedOut();
@@ -321,13 +283,25 @@ export default function BidFlow({ apiBaseUrl, onDone }: { apiBaseUrl: string; on
     return <div style={{ color: "var(--fg-dim)" }}>No active round right now.</div>;
   }
 
-  // Only reachable once `round` is a real round — `alreadyJoined` is never
-  // set when there's no round to check participation against (the effect
-  // returns right after `setRound(null)`), so gating on it *before* the
-  // `!round` check above would leave this stuck on "Loading…" forever
-  // whenever there's genuinely no active round.
-  if (alreadyJoined === null) {
+  // Only reachable once `round` is a real round — `isLeading` is never set
+  // when there's no round to check against (the effect returns right after
+  // `setRound(null)`), so gating on it *before* the `!round` check above
+  // would leave this stuck on "Loading…" forever whenever there's genuinely
+  // no active round.
+  if (isLeading === null) {
     return <div style={{ color: "var(--fg-dim)" }}>Loading…</div>;
+  }
+
+  if (isLeading && step === "amount") {
+    return (
+      <div>
+        <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: 24 }}>You're already leading</div>
+        <div style={{ marginTop: 10, fontSize: 13, lineHeight: 1.6, color: "var(--fg-dim)" }}>
+          Your bid of {formatMoney(round.currentLeaderCents)} is the current top bid. You can raise it again once
+          someone else outbids you. If nobody does before this round closes, the seat is yours.
+        </div>
+      </div>
+    );
   }
 
   if (step === "amount") {
@@ -347,11 +321,9 @@ export default function BidFlow({ apiBaseUrl, onDone }: { apiBaseUrl: string; on
           onChange={(e) => setBidValue(toBidInputValue(e.target.value))}
           style={inputStyle}
         />
-        {!alreadyJoined && (
-          <div style={{ marginTop: 10, fontSize: 11, color: "var(--fg-faint)" }}>
-            A deposit of {formatMoney(round.depositCents)} is charged now to enter this round.
-          </div>
-        )}
+        <div style={{ marginTop: 10, fontSize: 11, color: "var(--fg-faint)" }}>
+          Charged in full now. Refunded in full if someone outbids you.
+        </div>
         {error && <div style={{ marginTop: 10, fontSize: 12, color: "var(--fg-dim)" }}>{error}</div>}
         <button onClick={handleSubmitAmount} disabled={submitting} style={primaryButtonStyle}>
           {submitting ? "Please wait…" : "Displace"}
@@ -364,9 +336,9 @@ export default function BidFlow({ apiBaseUrl, onDone }: { apiBaseUrl: string; on
     if (!clientSecret) return <div style={{ color: "var(--fg-dim)" }}>Loading…</div>;
     return (
       <div>
-        <div style={fieldLabelStyle}>Deposit required to enter</div>
+        <div style={fieldLabelStyle}>Your bid</div>
         <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: 34, marginTop: 6 }}>
-          {formatMoney(round.depositCents)}
+          {formatMoney(toWholeDollarCents(bidValue))}
         </div>
         <Elements stripe={getStripe()} options={{ clientSecret, appearance: stripeAppearance }}>
           <PaymentStep apiBaseUrl={apiBaseUrl} roundId={round.roundId} onPaid={handlePaid} />
@@ -380,19 +352,21 @@ export default function BidFlow({ apiBaseUrl, onDone }: { apiBaseUrl: string; on
       <div>
         <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: 24 }}>Send your face</div>
         <div style={{ marginTop: 10, fontSize: 13, lineHeight: 1.6, color: "var(--fg-dim)" }}>
-          Front-facing photo, full face, no glasses or headwear.
+          You can change this anytime from your account settings.
         </div>
-        <input
-          type="file"
-          accept="image/jpeg,image/png,image/webp"
-          aria-label="Photo"
-          onChange={(e) => setPhotoFile(e.target.files?.[0] ?? null)}
-          style={{ display: "block", width: "100%", marginTop: 16, fontSize: 12, color: "var(--fg-dim)" }}
-        />
-        {photoError && <div style={{ marginTop: 10, fontSize: 12, color: "var(--fg-dim)" }}>{photoError}</div>}
-        <button onClick={uploadPhoto} disabled={submitting} style={primaryButtonStyle}>
-          {submitting ? "Uploading…" : "Upload photo"}
-        </button>
+        {sessionUser ? (
+          <PhotoUploader
+            apiBaseUrl={apiBaseUrl}
+            userId={sessionUser.id}
+            hasPhoto={!!sessionUser.photoPath}
+            submitLabel="Upload photo"
+            onUploaded={() => setStep("social")}
+            onUnauthorized={redirectToSignedOut}
+            initialCharacterRequest={sessionUser.characterRequest ?? ""}
+          />
+        ) : (
+          <div style={{ marginTop: 16, color: "var(--fg-dim)" }}>Loading…</div>
+        )}
       </div>
     );
   }
@@ -401,15 +375,16 @@ export default function BidFlow({ apiBaseUrl, onDone }: { apiBaseUrl: string; on
     <div>
       <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: 24 }}>Attach social media</div>
       <div style={{ marginTop: 10, fontSize: 13, lineHeight: 1.6, color: "var(--fg-dim)" }}>Optional.</div>
-      <label htmlFor="bid-flow-instagram" style={{ ...fieldLabelStyle, display: "block", marginTop: 20 }}>
-        Instagram URL
+      <label htmlFor="bid-flow-social" style={{ ...fieldLabelStyle, display: "block", marginTop: 20 }}>
+        Social media link
       </label>
+      {/* Any social network or personal site — not restricted to Instagram. */}
       <input
-        id="bid-flow-instagram"
+        id="bid-flow-social"
         type="text"
         placeholder="https://instagram.com/yourname"
-        value={instagramUrl}
-        onChange={(e) => setInstagramUrl(e.target.value)}
+        value={socialUrl}
+        onChange={(e) => setSocialUrl(e.target.value)}
         style={{ ...inputStyle, fontFamily: "inherit", fontSize: 14 }}
       />
       {socialError && <div style={{ marginTop: 10, fontSize: 12, color: "var(--fg-dim)" }}>{socialError}</div>}

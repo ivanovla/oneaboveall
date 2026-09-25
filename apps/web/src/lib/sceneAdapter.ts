@@ -76,6 +76,7 @@ function adaptRetinueMember(api: ApiRetinueMember, index: number): Person {
     priceCents: api.priceCents,
     since: startedAt,
     heldLabel: formatDurationLabel(endedAt.getTime() - startedAt.getTime()),
+    socialUrl: api.socialUrl ?? undefined,
   };
 }
 
@@ -100,6 +101,7 @@ export function adaptScene(api: ApiSceneResponse): Scene | null {
       // baked into a static label. Scene.astro branches on isChampion and
       // ignores this field for them.
       heldLabel: "",
+      socialUrl: api.champion.socialUrl ?? undefined,
     },
     retinue: api.retinue.map(adaptRetinueMember),
   };

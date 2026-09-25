@@ -2,7 +2,6 @@ import { desc, isNotNull, isNull, sql } from "drizzle-orm";
 import { db } from "../db/client";
 import { reigns, users } from "../db/schema";
 import { getCurrentReign, getLatestRound, getQueueLeader } from "../db/repository";
-import { calculateDeposit } from "../domain/deposit";
 import { BIDDING_PHASE_MS } from "../domain/config";
 
 // `reigns.occupantId` is a signed-in user's `users.id` — that was deliberate
@@ -47,6 +46,7 @@ export async function getScene(_now: Date) {
       occupantName: users.name,
       priceCents: reigns.priceCents,
       startedAt: reigns.startedAt,
+      socialUrl: users.socialUrl,
     })
     .from(reigns)
     .leftJoin(users, occupantIsUser)
@@ -60,6 +60,7 @@ export async function getScene(_now: Date) {
       priceCents: reigns.priceCents,
       startedAt: reigns.startedAt,
       endedAt: reigns.endedAt,
+      socialUrl: users.socialUrl,
     })
     .from(reigns)
     .leftJoin(users, occupantIsUser)
@@ -74,6 +75,7 @@ export async function getScene(_now: Date) {
           occupantName: displayName(champion.occupantId, champion.occupantName),
           priceCents: champion.priceCents,
           since: champion.startedAt,
+          socialUrl: champion.socialUrl,
         }
       : null,
     retinue: retinueRows.map((r) => ({
@@ -82,6 +84,7 @@ export async function getScene(_now: Date) {
       priceCents: r.priceCents,
       startedAt: r.startedAt,
       endedAt: r.endedAt!,
+      socialUrl: r.socialUrl,
     })),
   };
 }
@@ -120,9 +123,8 @@ export async function getLeaderboard() {
 
 export async function getCurrentRoundInfo(_now: Date): Promise<{
   roundId: string;
-  phase: "bidding" | "resolving" | "payment" | "closed";
+  phase: "bidding" | "closed";
   currentLeaderCents: number;
-  depositCents: number;
   biddingClosesAt: Date;
 } | null> {
   const reign = await getCurrentReign();
@@ -137,7 +139,6 @@ export async function getCurrentRoundInfo(_now: Date): Promise<{
     roundId: round.id,
     phase: round.phase,
     currentLeaderCents: topBid ? topBid.amountCents : reign.priceCents,
-    depositCents: calculateDeposit(reign.priceCents),
     biddingClosesAt: new Date(round.startsAt.getTime() + BIDDING_PHASE_MS),
   };
 }

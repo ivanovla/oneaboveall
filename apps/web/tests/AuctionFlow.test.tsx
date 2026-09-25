@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import AuctionFlow from "../src/components/AuctionFlow";
 
 // The Displace overlay's "bid" screen renders the real BidFlow, which
-// imports these — same mocks as LiveAuction.test.tsx/BidFlow.test.tsx.
+// imports these — same mocks as BidFlow.test.tsx.
 vi.mock("@stripe/stripe-js", () => ({
   loadStripe: vi.fn(async () => ({
     confirmPayment: vi.fn(async () => ({ error: undefined })),
@@ -27,33 +27,25 @@ beforeEach(() => {
 });
 
 describe("AuctionFlow", () => {
-  it("shows the current price and Displace button on the closed screen", () => {
+  it("shows a loading spinner for the price (not a guessed number) and the Displace button on the closed screen", () => {
     render(<AuctionFlow />);
     expect(screen.getByText("Displace")).toBeInTheDocument();
-    expect(screen.getByText("$4,210")).toBeInTheDocument();
-  });
-
-  it("renders the champion price it is given, not the mock constant", () => {
-    // index.astro passes the resolved scene's champion price here, so the
-    // headline figure can't drift from the price the Scene tooltip shows for
-    // the champion rendered directly above it.
-    render(<AuctionFlow currentPriceCents={987_600} />);
-    expect(screen.getByText("$9,876")).toBeInTheDocument();
-    expect(screen.queryByText("$4,210")).not.toBeInTheDocument();
+    expect(screen.getByRole("status", { name: /loading current price/i })).toBeInTheDocument();
   });
 
   it("renders a deterministic first countdown frame that ignores the wall clock", () => {
     // The island is server-rendered at build time (client:idle), so the first
     // render must not read Date.now() — otherwise the built HTML disagrees
-    // with what the browser computes on hydration. The countdown is measured
-    // from the mock snapshot instead, giving the prototype's demo figure
-    // regardless of what today's date happens to be.
-    // Pinning the clock to the epoch would show a ~500,000-hour countdown if
-    // the render read it; the assertion below only holds if it doesn't.
+    // with what the browser computes on hydration. Until the real
+    // biddingClosesAt is fetched, the countdown shows a neutral placeholder
+    // rather than reading the clock (or showing a number that would then
+    // visibly jump once live data arrives).
+    // Pinning the clock to the epoch and asserting the placeholder still
+    // shows is what proves the render never read it.
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(0);
     try {
       render(<AuctionFlow />);
-      expect(screen.getByText("06:41:12")).toBeInTheDocument();
+      expect(screen.getByText("—:--:--")).toBeInTheDocument();
     } finally {
       nowSpy.mockRestore();
     }
@@ -130,6 +122,155 @@ describe("AuctionFlow — already signed in", () => {
     await waitFor(() => expect(global.fetch).toHaveBeenCalled());
     fireEvent.click(screen.getByText("Displace"));
     expect(screen.getByText("Sign in to claim the seat")).toBeInTheDocument();
+  });
+});
+
+describe("AuctionFlow — photo reminder", () => {
+  const originalLocation = window.location;
+
+  beforeEach(() => {
+    // @ts-expect-error test override
+    delete window.location;
+    // @ts-expect-error test override
+    window.location = { href: "" };
+  });
+
+  afterEach(() => {
+    // @ts-expect-error test override
+    window.location = originalLocation;
+  });
+
+  function mockFetch(opts: { photoPath: string | null; isLeading: boolean }) {
+    return vi.fn(async (url: string, init?: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path === "/auth/me") return { ok: true, status: 200, json: async () => ({ id: "u1", email: "a@example.com", name: "A", photoPath: opts.photoPath }) };
+      if (path === "/current-round") return { ok: true, status: 200, json: async () => ({ roundId: "round-1", phase: "bidding", currentLeaderCents: 100_000, biddingClosesAt: "2026-09-23T12:00:00.000Z" }) };
+      if (path === "/rounds/round-1/me") return { ok: true, status: 200, json: async () => ({ isLeading: opts.isLeading }) };
+      if (path === "/auth/photo" && init?.method === "POST") return { ok: true, status: 200, json: async () => ({ photoPath: "u1.jpg" }) };
+      if (path === "/auth/character-request" && init?.method === "PATCH") return { ok: true, status: 200, json: async () => ({ characterRequest: null }) };
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as unknown as typeof fetch;
+  }
+
+  it("pops up asking for a photo when the signed-in visitor is currently leading with no photo on file", async () => {
+    global.fetch = mockFetch({ photoPath: null, isLeading: true });
+    render(<AuctionFlow />);
+
+    await waitFor(() => expect(screen.getByText(/add your photo/i)).toBeInTheDocument());
+    expect(screen.getByText(/you're currently leading/i)).toBeInTheDocument();
+  });
+
+  it("does not pop up when a photo is already on file", async () => {
+    global.fetch = mockFetch({ photoPath: "u1.jpg", isLeading: true });
+    render(<AuctionFlow />);
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledWith("http://127.0.0.1:3001/auth/me", { credentials: "include" }));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(screen.queryByText(/add your photo/i)).not.toBeInTheDocument();
+  });
+
+  it("does not pop up when the visitor isn't currently leading", async () => {
+    global.fetch = mockFetch({ photoPath: null, isLeading: false });
+    render(<AuctionFlow />);
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledWith("http://127.0.0.1:3001/rounds/round-1/me", { credentials: "include" }));
+    expect(screen.queryByText(/add your photo/i)).not.toBeInTheDocument();
+  });
+
+  it("never overrides a screen the visitor already navigated to themselves", async () => {
+    global.fetch = mockFetch({ photoPath: null, isLeading: true });
+    render(<AuctionFlow />);
+
+    // Click Displace immediately, before the reminder's own fetch chain (which
+    // starts on mount too) has resolved — the reminder must not clobber it
+    // once its own check comes back.
+    fireEvent.click(screen.getByText("Displace"));
+    await waitFor(() => expect(screen.getByText("Sign in to claim the seat")).toBeInTheDocument());
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(screen.getByText("Sign in to claim the seat")).toBeInTheDocument();
+    expect(screen.queryByText(/add your photo/i)).not.toBeInTheDocument();
+  });
+
+  it("closes once a photo is successfully uploaded", async () => {
+    global.fetch = mockFetch({ photoPath: null, isLeading: true });
+    render(<AuctionFlow />);
+
+    await waitFor(() => expect(screen.getByText(/add your photo/i)).toBeInTheDocument());
+
+    const file = new File(["fake-bytes"], "selfie.jpg", { type: "image/jpeg" });
+    fireEvent.change(screen.getByLabelText(/photo/i), { target: { files: [file] } });
+    fireEvent.click(screen.getByText("Upload photo"));
+
+    await waitFor(() => expect(screen.queryByText(/add your photo/i)).not.toBeInTheDocument());
+  });
+});
+
+describe("AuctionFlow — live price", () => {
+  // Neither figure is guessed at from build-time data anymore — both start
+  // as a loading state (a spinner for the price, a placeholder for the
+  // countdown) and switch to the real value the instant this fetch resolves,
+  // so nothing ever visibly jumps from one number to a different one.
+  it("shows the live current-round leader once the fetch resolves, replacing the spinner", async () => {
+    global.fetch = vi.fn(async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path === "/current-round") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ roundId: "round-1", phase: "bidding", currentLeaderCents: 555_500, biddingClosesAt: "2026-09-23T12:00:00.000Z" }),
+        };
+      }
+      return { ok: false, status: 401 };
+    }) as unknown as typeof fetch;
+
+    render(<AuctionFlow />);
+    expect(screen.getByRole("status", { name: /loading current price/i })).toBeInTheDocument();
+
+    await waitFor(() => expect(screen.getByText("$5,555")).toBeInTheDocument());
+    expect(screen.queryByRole("status", { name: /loading current price/i })).not.toBeInTheDocument();
+  });
+
+  it("keeps showing the spinner when there's no active round to poll", async () => {
+    global.fetch = vi.fn(async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path === "/current-round") return { ok: true, status: 200, json: async () => null };
+      return { ok: false, status: 401 };
+    }) as unknown as typeof fetch;
+
+    render(<AuctionFlow />);
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledWith("http://127.0.0.1:3001/current-round", { credentials: "include" }));
+    expect(screen.getByRole("status", { name: /loading current price/i })).toBeInTheDocument();
+  });
+
+  // The matching case for "Bidding window closes in": it used to always
+  // count down from the same fixed mock target (~6h41m on every reload),
+  // never the real round's actual close time.
+  it("switches the countdown to the live bidding window close time once the fetch resolves", async () => {
+    const liveClosesAt = new Date(Date.now() + 2 * 60 * 60 * 1000 + 30_000); // ~2h from now
+    global.fetch = vi.fn(async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path === "/current-round") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ roundId: "round-1", phase: "bidding", currentLeaderCents: 100_000, biddingClosesAt: liveClosesAt.toISOString() }),
+        };
+      }
+      return { ok: false, status: 401 };
+    }) as unknown as typeof fetch;
+
+    render(<AuctionFlow />);
+    // First frame, before live data has arrived: a neutral placeholder, not
+    // a guessed number that would then jump.
+    expect(screen.getByText("—:--:--")).toBeInTheDocument();
+
+    // Once the fetch resolves and the 1s ticker has fired at least once, the
+    // countdown switches to the real close time (~2h remaining here) —
+    // never the fixed "06:41:xx" mock figure.
+    await waitFor(() => expect(screen.getByText(/^0[12]:(59|00):\d\d$/)).toBeInTheDocument(), { timeout: 3000 });
+    expect(screen.queryByText(/^06:41:/)).not.toBeInTheDocument();
   });
 });
 

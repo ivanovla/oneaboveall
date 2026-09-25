@@ -95,7 +95,7 @@ const hotspots = people.map((person, i) => {
     isChampion,
     heldLabel: person.heldLabel,
     paid: formatMoney(person.priceCents),
-    instagramUrl: person.instagramUrl ?? "",
+    socialUrl: person.socialUrl ?? "",
   };
 });
 ---
@@ -120,7 +120,7 @@ const hotspots = people.map((person, i) => {
             data-is-champion={h.isChampion ? "true" : "false"}
             data-held-label={h.heldLabel}
             data-paid={h.paid}
-            data-instagram={h.instagramUrl}
+            data-social={h.socialUrl}
             data-tooltip-left={h.tooltipLeft}
             data-tooltip-top={h.tooltipTop}
           />
@@ -156,7 +156,7 @@ const hotspots = people.map((person, i) => {
         id="scene-tip-link"
         style="display: none"
       >
-        Instagram →
+        Social →
       </a>
     </div>
   </div>
@@ -385,14 +385,17 @@ const hotspots = people.map((person, i) => {
           : (data.heldLabel ?? "");
       paidEl.textContent = data.paid ?? "";
 
-      const instagram = data.instagram ?? "";
-      // Never assign an unvalidated string to `href`: today this is a
-      // hardcoded mock constant, but per docs/superpowers/specs/
-      // 2026-08-12-ui-reference.md it becomes a profile link the occupant
-      // supplies, and `javascript:...` in an href executes on click. Only
-      // http(s) URLs are ever installed; anything else hides the link.
-      if (isHttpUrl(instagram)) {
-        linkEl.href = instagram;
+      // Not restricted to Instagram — this is a link to whatever social
+      // network profile (or personal site) the occupant attached via the
+      // account sidebar's "Social media link" field (see PATCH
+      // /auth/social). Never assign an unvalidated string to `href`: the
+      // server already validates it's http(s) (see authMe.ts's
+      // `isValidSocialUrl`), but `javascript:...` in an href executes on
+      // click, so this is checked again here as the last line of defense
+      // right before it's installed.
+      const social = data.social ?? "";
+      if (isHttpUrl(social)) {
+        linkEl.href = social;
         linkEl.style.display = "";
       } else {
         linkEl.removeAttribute("href");
@@ -419,7 +422,22 @@ const hotspots = people.map((person, i) => {
       dot.addEventListener("blur", () => hide(dot));
       dot.addEventListener("click", (event) => {
         event.preventDefault();
+        // On a mouse, `mouseenter` has already run and shown the tooltip by
+        // the time a click lands, so `dot` is already `activeDot` — one
+        // click is enough to also open the social link. On touch, there is
+        // no hover: the *first* tap is this click firing cold (no tooltip
+        // shown yet), so it only reveals the tooltip, same as before: a
+        // tap that jumped straight to an external link with no name/photo
+        // shown first would be a bad surprise. A *second* tap on the same,
+        // already-open dot behaves like the mouse case and opens the link.
+        const alreadyOpen = activeDot === dot;
         show(dot);
+        if (alreadyOpen) {
+          const social = dot.dataset.social ?? "";
+          if (isHttpUrl(social)) {
+            window.open(social, "_blank", "noopener,noreferrer");
+          }
+        }
       });
     }
 

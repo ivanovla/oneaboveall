@@ -55,7 +55,7 @@ function retinueSince(daysAgo: number): Date {
   return new Date(mockReferenceNow.getTime() - daysAgo * ONE_DAY_MS);
 }
 
-const INSTAGRAM_URL = "https://instagram.com";
+const SOCIAL_URL = "https://instagram.com";
 
 const champion: Person = {
   occupantId: "mark-vilensky",
@@ -63,7 +63,7 @@ const champion: Person = {
   priceCents: 421_000, // "$4,210"
   since: championSince,
   heldLabel: "", // unused for the champion — held time is computed from `since`
-  instagramUrl: INSTAGRAM_URL,
+  socialUrl: SOCIAL_URL,
 };
 
 const retinue: Person[] = [
@@ -73,7 +73,7 @@ const retinue: Person[] = [
     priceCents: 398_000, // "$3,980"
     since: retinueSince(1),
     heldLabel: "1d",
-    instagramUrl: INSTAGRAM_URL,
+    socialUrl: SOCIAL_URL,
   },
   {
     occupantId: "osei-adjei",
@@ -81,7 +81,7 @@ const retinue: Person[] = [
     priceCents: 364_000, // "$3,640"
     since: retinueSince(2),
     heldLabel: "1d",
-    instagramUrl: INSTAGRAM_URL,
+    socialUrl: SOCIAL_URL,
   },
   {
     occupantId: "arthur-lemeshev",
@@ -89,7 +89,7 @@ const retinue: Person[] = [
     priceCents: 310_000, // "$3,100"
     since: retinueSince(3),
     heldLabel: "1d",
-    instagramUrl: INSTAGRAM_URL,
+    socialUrl: SOCIAL_URL,
   },
   {
     occupantId: "ivan-dorn",
@@ -97,7 +97,7 @@ const retinue: Person[] = [
     priceCents: 287_000, // "$2,870"
     since: retinueSince(4),
     heldLabel: "1d",
-    instagramUrl: INSTAGRAM_URL,
+    socialUrl: SOCIAL_URL,
   },
   {
     occupantId: "felix-lang",
@@ -105,7 +105,7 @@ const retinue: Person[] = [
     priceCents: 240_000, // "$2,400"
     since: retinueSince(5),
     heldLabel: "1d",
-    instagramUrl: INSTAGRAM_URL,
+    socialUrl: SOCIAL_URL,
   },
   {
     occupantId: "y-kimura",
@@ -113,7 +113,7 @@ const retinue: Person[] = [
     priceCents: 215_000, // "$2,150"
     since: retinueSince(6),
     heldLabel: "1d",
-    instagramUrl: INSTAGRAM_URL,
+    socialUrl: SOCIAL_URL,
   },
   {
     occupantId: "timur-aslanov",
@@ -121,7 +121,7 @@ const retinue: Person[] = [
     priceCents: 198_000, // "$1,980"
     since: retinueSince(7),
     heldLabel: "1d",
-    instagramUrl: INSTAGRAM_URL,
+    socialUrl: SOCIAL_URL,
   },
   {
     occupantId: "paul-renier",
@@ -129,7 +129,7 @@ const retinue: Person[] = [
     priceCents: 172_000, // "$1,720"
     since: retinueSince(8),
     heldLabel: "1d",
-    instagramUrl: INSTAGRAM_URL,
+    socialUrl: SOCIAL_URL,
   },
 ];
 

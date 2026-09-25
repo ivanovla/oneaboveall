@@ -1,60 +1,59 @@
 import { useEffect, useState } from "react";
 import { formatMoney, formatCountdown } from "../lib/format";
-import { mockCurrentPriceCents, mockBiddingWindowClosesAt, mockReferenceNow, mockLeaderboard } from "../lib/mockData";
+import { mockLeaderboard } from "../lib/mockData";
 import type { LeaderboardRow } from "../lib/types";
 import UserBadge from "./UserBadge";
 import BidFlow from "./BidFlow";
+import PhotoUploader from "./PhotoUploader";
 
-type Screen = "closed" | "auth" | "bid" | "top";
+type Screen = "closed" | "auth" | "bid" | "top" | "photoReminder";
 
 /**
- * Renders `closesAt` as a live HH:MM:SS countdown.
+ * Renders a live HH:MM:SS countdown to `closesAt` — the real
+ * `biddingClosesAt` from `GET /current-round`, fetched once by the caller
+ * and handed down (see the poll effect below). `closesAt` is a fixed
+ * timestamp for as long as the current round is running, so once it's
+ * known, ticking it down is pure client-side arithmetic against the
+ * browser's own clock — nothing here ever needs to ask the server what the
+ * remaining time is, only what the close time itself is.
  *
- * Two constraints shape this:
- *
- * 1. Hydration safety. This island is mounted with `client:idle`, so Astro
- *    server-renders it at *build* time and the browser has to reproduce that
- *    exact markup on hydration. Reading `Date.now()` during render (as
- *    `useState(() => Date.now())` did) bakes the build machine's clock into
- *    the static HTML, which the browser then contradicts — a React hydration
- *    mismatch, plus a stale figure on screen until the idle callback fires.
- *    So the first render is derived purely from fixed data, and the only
- *    `Date.now()` reads happen inside the effect, which never runs on the
- *    server.
- *
- * 2. A frozen mock snapshot. Remaining time is measured from
- *    `mockReferenceNow`, not the real wall clock. The mock dataset is a
- *    snapshot taken at that instant; comparing its fixed close time against
- *    the real clock is what decayed the countdown to a permanent `00:00:00`
- *    in the first place, and no fixed date can survive that comparison for
- *    more than a few hours. Anchoring to the snapshot reproduces the
- *    prototype's own behaviour exactly (it seeds `left` with a literal
- *    6h41m12s and decrements it once a second) while keeping `closesAt`
- *    modelled the way a real API would hand it over — as a timestamp.
- *
- *    KNOWN GAP — deliberate, tracked. The API exposes only `getScene` /
- *    `getLeaderboard`; there is no round state fetch on the public homepage,
- *    so this countdown is still a demo figure rather than a real bidding
- *    window close time. The real bidding/deposit flow lives in the
- *    Displace overlay's "bid" screen (BidFlow.tsx), which fetches the real
- *    `GET /current-round` for a real `biddingClosesAt`.
- *
- * The ticking is driven by elapsed real time since mount rather than by
- * counting interval fires, so a throttled background tab resumes at the right
- * value instead of drifting.
+ * Deliberately shows a neutral placeholder, not a guessed number, before
+ * `closesAt` is known: this island is mounted with `client:idle`, so Astro
+ * server-renders it at *build* time and the browser has to reproduce that
+ * exact markup on hydration — reading `Date.now()` during render would bake
+ * the build machine's clock into the static HTML, which the browser then
+ * contradicts. An earlier version filled that gap with a fixed demo
+ * countdown instead, which meant every page load visibly *jumped* from that
+ * made-up figure to the real one the instant the fetch resolved. A
+ * placeholder has nothing to jump from.
  */
-function useCountdown(closesAt: Date): string {
-  const remainingAtSnapshotMs = closesAt.getTime() - mockReferenceNow.getTime();
-  const [elapsedSinceMountMs, setElapsedSinceMountMs] = useState(0);
+function useCountdown(closesAt: Date | null): string {
+  const [nowMs, setNowMs] = useState<number | null>(null);
 
   useEffect(() => {
-    const mountedAt = Date.now();
-    const id = setInterval(() => setElapsedSinceMountMs(Date.now() - mountedAt), 1000);
+    if (!closesAt) return;
+    setNowMs(Date.now());
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(id);
-  }, []);
+  }, [closesAt]);
 
-  return formatCountdown(remainingAtSnapshotMs - elapsedSinceMountMs);
+  if (!closesAt || nowMs === null) return "—:--:--";
+  return formatCountdown(closesAt.getTime() - nowMs);
 }
+
+// Stands in for the headline price while it's still unconfirmed (before the
+// first /current-round fetch resolves — see the poll effect below). Sized to
+// roughly match the price text's own footprint so the swap from spinner to
+// number doesn't visibly shift the layout around it.
+const priceSpinnerStyle: React.CSSProperties = {
+  width: 56,
+  height: 56,
+  margin: "6px 0",
+  border: "3px solid var(--on-scene-faint)",
+  borderTopColor: "var(--gold)",
+  borderRadius: "50%",
+  animation: "spin .9s linear infinite",
+};
 
 const overlayShellStyle: React.CSSProperties = {
   position: "fixed",
@@ -207,13 +206,6 @@ const signInLinkStyle: React.CSSProperties = {
 export default function AuctionFlow({
   initialScreen = "closed",
   leaderboard = mockLeaderboard,
-  // The price the seat currently costs — i.e. the reigning champion's
-  // priceCents. pages/index.astro passes the real, adapted champion's price
-  // here, so the headline figure above the Displace button is the same number
-  // the scene's own tooltip shows for the champion rendered right above it.
-  // Defaults to the mock constant so this component still renders standalone
-  // (tests, any caller with no live data) exactly as it did before.
-  currentPriceCents = mockCurrentPriceCents,
   // Base URL of the live API — "Continue with Google/Apple" below are real,
   // top-level-navigation links into it (GET /auth/google, GET /auth/apple),
   // not client-side calls, so the browser follows the provider's redirect
@@ -222,7 +214,6 @@ export default function AuctionFlow({
 }: {
   initialScreen?: Screen;
   leaderboard?: LeaderboardRow[];
-  currentPriceCents?: number;
   apiBaseUrl?: string;
 } = {}) {
   const [screen, setScreen] = useState<Screen>(initialScreen);
@@ -231,27 +222,152 @@ export default function AuctionFlow({
   // since a signed-out visitor is by far the common case and the check
   // resolves in well under the time it takes to actually click the button.
   const [signedIn, setSignedIn] = useState(false);
+  // The signed-in user's id — needed to hand to the photo-reminder's
+  // PhotoUploader below. Distinct from UserBadge's own copy of this same
+  // session check; each widget owns its own fetch rather than one being
+  // threaded through the other.
+  const [sessionUserId, setSessionUserId] = useState<string | null>(null);
+  // null until the first live fetch resolves — the headline shows a spinner
+  // until then rather than a build/SSR-time price that might already be
+  // wrong. pages/index.astro used to pass that build-time price in as a
+  // fallback (the reigning champion's priceCents, fetched from /scene at
+  // build time); dropped in favor of only ever showing a number this
+  // component has itself confirmed live, matching biddingClosesAt below —
+  // no guess that can later visibly jump to a different real value.
+  const [liveLeaderCents, setLiveLeaderCents] = useState<number | null>(null);
+  // Same reasoning as `liveLeaderCents` above, for the "Bidding window
+  // closes in" line — see useCountdown's own doc comment.
+  const [liveBiddingClosesAt, setLiveBiddingClosesAt] = useState<Date | null>(null);
   const theme = useThemeToggle();
-  const clock = useCountdown(mockBiddingWindowClosesAt);
-  const priceLabel = formatMoney(currentPriceCents);
+  const clock = useCountdown(liveBiddingClosesAt);
+  const priceLabel = liveLeaderCents === null ? null : formatMoney(liveLeaderCents);
 
+  // One combined effect for everything that needs a session check and/or the
+  // live round: the price/countdown poll, the sign-in check, and the
+  // photo-reminder nudge all used to fetch independently, which meant a
+  // signed-in visitor missing a photo triggered *two* separate
+  // /current-round requests on the very same page load. `authPromise`
+  // resolves exactly once and every poll tick awaits it before deciding
+  // whether to run the (also one-time) photo-reminder check — that ordering
+  // guarantees correctness without racing whichever fetch happens to land
+  // first, and without a second fetch of the busiest route in the service.
   useEffect(() => {
     let cancelled = false;
-    fetch(`${apiBaseUrl}/auth/me`, { credentials: "include" })
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let needsPhotoReminder = false;
+    let photoReminderChecked = false;
+    const POLL_INTERVAL_MS = 8000;
+
+    const authPromise = fetch(`${apiBaseUrl}/auth/me`, { credentials: "include" })
       .then((res) => {
-        if (!cancelled) setSignedIn(res.ok);
+        if (cancelled) return null;
+        setSignedIn(res.ok);
+        return res.ok ? res.json() : null;
+      })
+      .then((data: { id: string; photoPath: string | null } | null) => {
+        if (cancelled || !data) return;
+        setSessionUserId(data.id);
+        if (!data.photoPath) needsPhotoReminder = true;
       })
       .catch(() => {
         if (!cancelled) setSignedIn(false);
       });
+
+    // Currently paid (leading the active round) but no photo on file: the
+    // mandatory photo step in BidFlow (see BidFlow.tsx's "photo" step) may
+    // have been abandoned after paying — a real bid with no photo attached is
+    // an incomplete participation, so prompt for it here too. Piggybacks on
+    // the round id the poll below already fetched rather than re-fetching
+    // it, and only ever runs once per mount (`photoReminderChecked`), not on
+    // every subsequent poll tick.
+    function checkPhotoReminder(roundId: string) {
+      if (photoReminderChecked) return;
+      photoReminderChecked = true;
+      fetch(`${apiBaseUrl}/rounds/${roundId}/me`, { credentials: "include" })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((me: { isLeading: boolean } | null) => {
+          if (cancelled || !me?.isLeading) return;
+          // Never clobber a screen the visitor already navigated to
+          // themselves (e.g. they clicked Displace while this was in flight).
+          setScreen((current) => (current === "closed" ? "photoReminder" : current));
+        })
+        .catch(() => {
+          // Best-effort nudge — nothing to surface if this particular check
+          // fails; the reminder just won't show for this page load.
+        });
+    }
+
+    // Keeps the headline price *and* the bidding-window countdown live while
+    // the tab is open, not just accurate at the moment this page happened to
+    // render. Self-rescheduling rather than setInterval so a slow response
+    // can't pile up overlapping requests, and paused entirely while the tab
+    // is hidden (resuming with an immediate refresh when it becomes visible
+    // again) rather than burning polls a backgrounded tab has no use for.
+    async function poll() {
+      try {
+        const res = await fetch(`${apiBaseUrl}/current-round`, { credentials: "include" });
+        if (!cancelled && res.ok) {
+          const data: { roundId: string; currentLeaderCents: number; biddingClosesAt: string } | null = await res.json();
+          if (!cancelled) {
+            setLiveLeaderCents(data ? data.currentLeaderCents : null);
+            // Same round → same close time on every poll — keep the same
+            // Date *reference* rather than swapping in an equal-but-new one
+            // each tick, so useCountdown's effect (keyed on this value)
+            // doesn't restart its ticker every 8 seconds for no reason.
+            setLiveBiddingClosesAt((prev) => {
+              if (!data) return null;
+              const nextMs = new Date(data.biddingClosesAt).getTime();
+              return prev && prev.getTime() === nextMs ? prev : new Date(nextMs);
+            });
+            if (data) {
+              await authPromise;
+              if (!cancelled && needsPhotoReminder) checkPhotoReminder(data.roundId);
+            }
+          }
+        }
+      } catch {
+        // Transient failure — the next poll (or the build-time fallback
+        // price) covers it; nothing to surface for a background refresh.
+      }
+      if (!cancelled && document.visibilityState !== "hidden") {
+        timer = setTimeout(poll, POLL_INTERVAL_MS);
+      }
+    }
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === "hidden") {
+        if (timer) clearTimeout(timer);
+        timer = null;
+      } else if (!timer) {
+        poll();
+      }
+    }
+
+    poll();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
       cancelled = true;
+      if (timer) clearTimeout(timer);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [apiBaseUrl]);
 
   function closeOverlay() {
     setScreen("closed");
   }
+
+  // Escape closes whichever overlay is open (sign-in, Displace, the photo
+  // reminder, the leaderboard) — same action as each one's own Close button,
+  // just from the keyboard. Matches UserBadge's own sidebar, which already
+  // does this.
+  useEffect(() => {
+    if (screen === "closed") return;
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setScreen("closed");
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [screen]);
 
   // Already signed in — go straight to the bid entry, skipping the sign-in
   // links a signed-in visitor has no use for.
@@ -308,16 +424,20 @@ export default function AuctionFlow({
           >
             Current price of the seat
           </div>
-          <div
-            style={{
-              fontFamily: "'Cormorant Garamond', Georgia, serif",
-              fontSize: "clamp(46px, 7vw, 88px)",
-              lineHeight: 0.92,
-              letterSpacing: "-.02em",
-            }}
-          >
-            {priceLabel}
-          </div>
+          {priceLabel === null ? (
+            <div style={priceSpinnerStyle} role="status" aria-label="Loading current price" />
+          ) : (
+            <div
+              style={{
+                fontFamily: "'Cormorant Garamond', Georgia, serif",
+                fontSize: "clamp(46px, 7vw, 88px)",
+                lineHeight: 0.92,
+                letterSpacing: "-.02em",
+              }}
+            >
+              {priceLabel}
+            </div>
+          )}
         </div>
         <button
           onClick={handleDisplace}
@@ -374,6 +494,23 @@ export default function AuctionFlow({
       {screen === "bid" && (
         <OverlayShell stepLabel="Displace" onClose={closeOverlay}>
           <BidFlow apiBaseUrl={apiBaseUrl} onDone={closeOverlay} />
+        </OverlayShell>
+      )}
+
+      {screen === "photoReminder" && sessionUserId && (
+        <OverlayShell stepLabel="Photo" onClose={closeOverlay}>
+          <div style={headingStyle}>Add your photo</div>
+          <div style={{ marginTop: 10, fontSize: 13, lineHeight: 1.6, color: "var(--fg-dim)" }}>
+            You're currently leading — a photo is required to complete your participation.
+          </div>
+          <PhotoUploader
+            apiBaseUrl={apiBaseUrl}
+            userId={sessionUserId}
+            hasPhoto={false}
+            submitLabel="Upload photo"
+            onUploaded={closeOverlay}
+            onUnauthorized={closeOverlay}
+          />
         </OverlayShell>
       )}
 

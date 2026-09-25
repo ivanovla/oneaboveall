@@ -47,7 +47,17 @@ export function __resetCacheForTests(): void {
 }
 
 export function registerCurrentRoundRoute(app: FastifyInstance): void {
-  app.get("/current-round", async () => {
+  app.get("/current-round", async (_request, reply) => {
+    // Every visitor on the homepage polls this route (see AuctionFlow.tsx's
+    // live price/countdown), so at real scale this is the single
+    // highest-traffic route in the whole service. The in-process cache above
+    // already collapses concurrent pollers into one DB round-trip per
+    // process; this header does the same one step earlier, letting any
+    // reverse proxy or CDN in front of this service (nginx, Cloudflare, …)
+    // absorb the same burst before it ever reaches this process at all.
+    // `public` (not `private`) is deliberate: the response never varies by
+    // caller — no cookie/session is read on this route.
+    reply.header("cache-control", `public, max-age=${Math.floor(CACHE_TTL_MS / 1000)}`);
     return getCachedCurrentRoundInfo();
   });
 }

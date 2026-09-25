@@ -1,0 +1,114 @@
+# The oneabobeall-nginx-conf ConfigMap this Deployment mounts is created by
+# deploy.sh directly from infra/docker/nginx.conf
+# (`kubectl create configmap ... --from-file=default.conf=...`), not defined
+# here — embedding a multi-line nginx config as inline YAML data loses
+# indentation fidelity through envsubst, and a single source file (the one
+# infra/docker/web.Dockerfile also references conceptually) is easier to
+# keep in sync than two copies.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oneabobeall-web
+  namespace: oneabobeall
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oneabobeall-web
+  template:
+    metadata:
+      labels:
+        app: oneabobeall-web
+    spec:
+      # Builds the static site into the shared volume before nginx starts,
+      # so nginx never comes up pointed at an empty/missing docroot. Same
+      # image as the rebuilder sidecar below — see
+      # infra/docker/rebuild-server.mjs's header comment.
+      initContainers:
+        - name: initial-build
+          image: oneabobeall-web:${IMAGE_TAG}
+          imagePullPolicy: Never
+          args: ["node", "rebuild-server.mjs", "--once"]
+          volumeMounts:
+            - name: shared-site
+              mountPath: /shared
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "200m"
+            limits:
+              memory: "512Mi"
+              cpu: "1000m"
+      containers:
+        - name: nginx
+          image: nginx:alpine
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: shared-site
+              mountPath: /shared
+            - name: nginx-conf
+              mountPath: /etc/nginx/conf.d/default.conf
+              subPath: default.conf
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "50m"
+            limits:
+              memory: "96Mi"
+              cpu: "200m"
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 2
+            periodSeconds: 10
+        # Long-running sidecar exposing POST /rebuild — apps/api calls this
+        # (via the oneabobeall-web Service, port 8080) every time a bidding
+        # window closes and installs a new champion. Not routed through the
+        # Ingress; only reachable from inside the cluster.
+        - name: web-rebuilder
+          image: oneabobeall-web:${IMAGE_TAG}
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: shared-site
+              mountPath: /shared
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 20
+      volumes:
+        - name: shared-site
+          emptyDir: {}
+        - name: nginx-conf
+          configMap:
+            name: oneabobeall-nginx-conf
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oneabobeall-web
+  namespace: oneabobeall
+spec:
+  selector:
+    app: oneabobeall-web
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 80
+    - name: rebuild
+      protocol: TCP
+      port: 8080
+      targetPort: 8080

@@ -9,6 +9,10 @@ export interface ApiPerson {
   occupantName?: string;
   priceCents: number;
   since: string;
+  // A link to any social network profile this occupant attached — never
+  // restricted to one platform. Absent (older API deployments) or null (never
+  // set) both mean "no link to show".
+  socialUrl?: string | null;
 }
 
 export interface ApiRetinueMember {
@@ -17,6 +21,7 @@ export interface ApiRetinueMember {
   priceCents: number;
   startedAt: string;
   endedAt: string;
+  socialUrl?: string | null;
 }
 
 export interface ApiSceneResponse {

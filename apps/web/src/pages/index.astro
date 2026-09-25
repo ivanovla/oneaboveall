@@ -125,22 +125,17 @@ const referenceNow: Date = live?.referenceNow ?? mockReferenceNow;
 <BaseLayout title="oneabobeall">
   <Scene scene={scene} referenceNow={referenceNow} />
   <!--
-    `scene` is the single resolved source of truth by this point (real or
-    mock, never a mix), so the headline "current price of the seat" under the
-    Displace button is by construction the same figure the Scene tooltip
-    shows for the champion directly above it.
-  -->
-  <!--
     AuctionFlow now also renders the account badge (the one deliberate live
     element on this otherwise fully static page — see UserBadge.tsx's own
     header comment) inside its own top-right chrome row, so the badge sits
     flush with the Light/Leaderboard chips instead of needing independent
     fixed-position math to line up with them.
+
+    The headline "current price of the seat" is no longer seeded from
+    `scene.champion.priceCents` here — AuctionFlow shows a spinner for it
+    until its own live GET /current-round fetch resolves, rather than a
+    build-time figure that could already be wrong by the time this page is
+    viewed (see AuctionFlow.tsx's own comment on `liveLeaderCents`).
   -->
-  <AuctionFlow
-    client:idle
-    leaderboard={leaderboard}
-    currentPriceCents={scene.champion.priceCents}
-    apiBaseUrl={apiBaseUrl}
-  />
+  <AuctionFlow client:idle leaderboard={leaderboard} apiBaseUrl={apiBaseUrl} />
 </BaseLayout>

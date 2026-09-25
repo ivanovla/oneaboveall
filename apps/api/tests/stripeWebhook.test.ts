@@ -5,10 +5,10 @@ import { buildServer } from "../src/server";
 // the `import { buildServer } from "../src/server"` above, which transitively
 // imports the two modules mocked below. Plain top-level `const`s would still
 // be in their temporal dead zone when those factories run, so the shared spies
-// must be declared with vi.hoisted(). (Same reasoning as joinRound.test.ts.)
-const { constructEvent, joinRoundMock, createRefund } = vi.hoisted(() => ({
+// must be declared with vi.hoisted().
+const { constructEvent, recordBidMock, createRefund } = vi.hoisted(() => ({
   constructEvent: vi.fn(),
-  joinRoundMock: vi.fn(async () => ({ outcome: "joined" as const })),
+  recordBidMock: vi.fn(async () => ({ outcome: "recorded" as const })),
   createRefund: vi.fn(async () => ({ id: "re_1" })),
 }));
 
@@ -18,8 +18,8 @@ vi.mock("../src/stripeClient", () => ({
   STRIPE_WEBHOOK_SECRET: "whsec_test",
 }));
 
-vi.mock("engine/engine/joinRound", () => ({
-  joinRound: joinRoundMock,
+vi.mock("engine/engine/recordBid", () => ({
+  recordBid: recordBidMock,
 }));
 
 describe("POST /webhooks/stripe", () => {
@@ -29,8 +29,8 @@ describe("POST /webhooks/stripe", () => {
   // an earlier test.
   beforeEach(() => {
     constructEvent.mockReset();
-    joinRoundMock.mockReset();
-    joinRoundMock.mockResolvedValue({ outcome: "joined" as const });
+    recordBidMock.mockReset();
+    recordBidMock.mockResolvedValue({ outcome: "recorded" as const });
     createRefund.mockReset();
     createRefund.mockResolvedValue({ id: "re_1" });
   });
@@ -42,7 +42,7 @@ describe("POST /webhooks/stripe", () => {
     // The signature check must happen before the event payload is trusted at
     // all — nothing may reach the engine on an unverified request.
     expect(constructEvent).not.toHaveBeenCalled();
-    expect(joinRoundMock).not.toHaveBeenCalled();
+    expect(recordBidMock).not.toHaveBeenCalled();
   });
 
   it("rejects a request whose signature fails verification", async () => {
@@ -58,7 +58,7 @@ describe("POST /webhooks/stripe", () => {
       payload: { hello: "world" },
     });
     expect(response.statusCode).toBe(400);
-    expect(joinRoundMock).not.toHaveBeenCalled();
+    expect(recordBidMock).not.toHaveBeenCalled();
   });
 
   it("verifies the signature against the exact raw request bytes, not a re-serialized body", async () => {
@@ -85,16 +85,14 @@ describe("POST /webhooks/stripe", () => {
     expect(secret).toBe("whsec_test");
   });
 
-  it("calls joinRound with the PaymentIntent's metadata and payment method on payment_intent.succeeded", async () => {
+  it("calls recordBid with the PaymentIntent's metadata on payment_intent.succeeded", async () => {
     constructEvent.mockReturnValueOnce({
       type: "payment_intent.succeeded",
       data: {
         object: {
           id: "pi_1",
-          amount: 1_000,
-          payment_method: "pm_1",
-          customer: "cus_1",
-          metadata: { kind: "deposit", roundId: "round-1", bidderId: "challenger" },
+          amount: 11_000,
+          metadata: { kind: "bid", roundId: "round-1", bidderId: "challenger", amountCents: "11000" },
         },
       },
     });
@@ -109,31 +107,16 @@ describe("POST /webhooks/stripe", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ received: true });
-    expect(joinRoundMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        roundId: "round-1",
-        bidderId: "challenger",
-        depositCents: 1_000,
-        depositRef: "pi_1",
-        paymentMethodRef: "pm_1",
-        customerRef: "cus_1",
-      }),
+    expect(recordBidMock).toHaveBeenCalledWith(
+      { roundId: "round-1", bidderId: "challenger", amountCents: 11_000, paymentRef: "pi_1", now: expect.any(Date) },
       expect.anything(),
     );
   });
 
-  it("accepts an expanded payment_method object, using its id", async () => {
+  it("does not call recordBid for a succeeded PaymentIntent that carries no bid metadata", async () => {
     constructEvent.mockReturnValueOnce({
       type: "payment_intent.succeeded",
-      data: {
-        object: {
-          id: "pi_2",
-          amount: 2_000,
-          payment_method: { id: "pm_2", object: "payment_method" },
-          customer: { id: "cus_2", object: "customer" },
-          metadata: { kind: "deposit", roundId: "round-1", bidderId: "challenger" },
-        },
-      },
+      data: { object: { id: "pi_unmarked", amount: 39_000, metadata: {} } },
     });
 
     const app = buildServer();
@@ -145,33 +128,7 @@ describe("POST /webhooks/stripe", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(joinRoundMock).toHaveBeenCalledWith(
-      expect.objectContaining({ depositRef: "pi_2", paymentMethodRef: "pm_2", customerRef: "cus_2" }),
-      expect.anything(),
-    );
-  });
-
-  it("does not call joinRound for a succeeded PaymentIntent that carries no round metadata", async () => {
-    // The remainder off-session charge (StripePaymentProvider) also emits
-    // payment_intent.succeeded. It carries no roundId/bidderId metadata, and
-    // must never be mistaken for a deposit — doing so would hand it to
-    // joinRound with a foreign depositRef, whose duplicate-join path would
-    // refund the remainder charge we just collected.
-    constructEvent.mockReturnValueOnce({
-      type: "payment_intent.succeeded",
-      data: { object: { id: "pi_remainder", amount: 39_000, payment_method: "pm_1", metadata: {} } },
-    });
-
-    const app = buildServer();
-    const response = await app.inject({
-      method: "POST",
-      url: "/webhooks/stripe",
-      headers: { "stripe-signature": "valid" },
-      payload: {},
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(joinRoundMock).not.toHaveBeenCalled();
+    expect(recordBidMock).not.toHaveBeenCalled();
   });
 
   it("ignores event types it doesn't handle, still returning 200", async () => {
@@ -186,23 +143,21 @@ describe("POST /webhooks/stripe", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(joinRoundMock).not.toHaveBeenCalled();
+    expect(recordBidMock).not.toHaveBeenCalled();
   });
 
-  it("returns a non-2xx when joinRound fails, so Stripe redelivers the event", async () => {
+  it("returns a non-2xx when recordBid fails, so Stripe redelivers the event", async () => {
     constructEvent.mockReturnValueOnce({
       type: "payment_intent.succeeded",
       data: {
         object: {
           id: "pi_3",
-          amount: 1_000,
-          payment_method: "pm_1",
-          customer: "cus_1",
-          metadata: { kind: "deposit", roundId: "round-1", bidderId: "challenger" },
+          amount: 11_000,
+          metadata: { kind: "bid", roundId: "round-1", bidderId: "challenger", amountCents: "11000" },
         },
       },
     });
-    joinRoundMock.mockRejectedValueOnce(new Error("database is down"));
+    recordBidMock.mockRejectedValueOnce(new Error("database is down"));
 
     const app = buildServer();
     const response = await app.inject({
@@ -212,24 +167,22 @@ describe("POST /webhooks/stripe", () => {
       payload: {},
     });
 
-    // A 200 here would tell Stripe the deposit was successfully recorded when
-    // it wasn't, and the event would never be redelivered.
+    // A 200 here would tell Stripe the bid was successfully recorded when it
+    // wasn't, and the event would never be redelivered.
     expect(response.statusCode).toBeGreaterThanOrEqual(500);
   });
 
-  it("ignores a succeeded PaymentIntent whose metadata lacks the kind=deposit marker", async () => {
-    // Round metadata alone is not proof this is a deposit — any other
+  it("ignores a succeeded PaymentIntent whose metadata lacks the kind=bid marker", async () => {
+    // Round metadata alone is not proof this is a bid — any other
     // PaymentIntent this service ever creates could carry similar keys. The
-    // explicit marker is what identifies a deposit.
+    // explicit marker is what identifies one.
     constructEvent.mockReturnValueOnce({
       type: "payment_intent.succeeded",
       data: {
         object: {
           id: "pi_unmarked",
-          amount: 1_000,
-          payment_method: "pm_1",
-          customer: "cus_1",
-          metadata: { roundId: "round-1", bidderId: "challenger" },
+          amount: 11_000,
+          metadata: { roundId: "round-1", bidderId: "challenger", amountCents: "11000" },
         },
       },
     });
@@ -243,56 +196,8 @@ describe("POST /webhooks/stripe", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(joinRoundMock).not.toHaveBeenCalled();
+    expect(recordBidMock).not.toHaveBeenCalled();
     expect(createRefund).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["payment_method", { id: "pi_nopm", amount: 1_000, customer: "cus_1", metadata: { kind: "deposit", roundId: "round-1", bidderId: "challenger" } }],
-    ["customer", { id: "pi_nocus", amount: 1_000, payment_method: "pm_1", metadata: { kind: "deposit", roundId: "round-1", bidderId: "challenger" } }],
-  ])("refunds a collected deposit whose PaymentIntent has no %s, since it can never be joined", async (_field, object) => {
-    // Without a participant row there is nothing that will ever refund this
-    // charge — logging and walking away silently keeps the bidder's money.
-    constructEvent.mockReturnValueOnce({ type: "payment_intent.succeeded", data: { object } });
-
-    const app = buildServer();
-    const response = await app.inject({
-      method: "POST",
-      url: "/webhooks/stripe",
-      headers: { "stripe-signature": "valid" },
-      payload: {},
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(joinRoundMock).not.toHaveBeenCalled();
-    expect(createRefund).toHaveBeenCalledWith({ payment_intent: (object as { id: string }).id });
-  });
-
-  it("returns a non-2xx when that refund itself fails, so Stripe redelivers", async () => {
-    constructEvent.mockReturnValueOnce({
-      type: "payment_intent.succeeded",
-      data: {
-        object: {
-          id: "pi_nopm",
-          amount: 1_000,
-          customer: "cus_1",
-          metadata: { kind: "deposit", roundId: "round-1", bidderId: "challenger" },
-        },
-      },
-    });
-    createRefund.mockRejectedValueOnce(new Error("stripe unavailable"));
-
-    const app = buildServer();
-    const response = await app.inject({
-      method: "POST",
-      url: "/webhooks/stripe",
-      headers: { "stripe-signature": "valid" },
-      payload: {},
-    });
-
-    // Swallowing this would drop the refund permanently — the charge has no
-    // participant row, so no other path in the system would ever retry it.
-    expect(response.statusCode).toBeGreaterThanOrEqual(500);
   });
 });
 
@@ -302,7 +207,7 @@ describe("POST /webhooks/stripe", () => {
 describe("application/json content-type parser", () => {
   // Every route below is reached before its handler runs: the parser rejects
   // these bodies, so the assertions hold regardless of route-level logic.
-  const routes = ["/bids", "/rounds/round-1/join", "/webhooks/stripe"];
+  const routes = ["/bids", "/webhooks/stripe"];
 
   it.each(routes)("rejects malformed JSON on %s with 400, not 500", async (url) => {
     const app = buildServer();

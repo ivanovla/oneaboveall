@@ -22,7 +22,6 @@ vi.mock("engine/queries/publicScene", () => ({
     roundId: "round-1",
     phase: "bidding",
     currentLeaderCents: 421_000,
-    depositCents: 42_100,
     biddingClosesAt: new Date("2026-09-22T12:00:00.000Z"),
   })),
 }));
@@ -35,8 +34,18 @@ describe("GET /current-round", () => {
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.roundId).toBe("round-1");
-    expect(body.depositCents).toBe(42_100);
     expect(body.biddingClosesAt).toBe("2026-09-22T12:00:00.000Z");
+  });
+
+  // Every homepage visitor polls this route (AuctionFlow.tsx's live
+  // price/countdown), so at real scale it's the highest-traffic route in the
+  // service — a short public cache-control lets any reverse proxy or CDN in
+  // front absorb concurrent load before it ever reaches this process.
+  it("sets a short public cache-control header matching the in-process cache TTL", async () => {
+    const app = buildServer();
+    const response = await app.inject({ method: "GET", url: "/current-round" });
+
+    expect(response.headers["cache-control"]).toBe("public, max-age=1");
   });
 
   it("returns null (not an error) when there's no active reign yet", async () => {
@@ -57,7 +66,6 @@ describe("GET /current-round", () => {
       roundId: "round-1",
       phase: "bidding",
       currentLeaderCents: 100_000,
-      depositCents: 10_000,
       biddingClosesAt: new Date("2026-09-23T12:00:00.000Z"),
     });
 
@@ -85,7 +93,6 @@ describe("GET /current-round", () => {
       roundId: "round-2",
       phase: "bidding",
       currentLeaderCents: 200_000,
-      depositCents: 20_000,
       biddingClosesAt: new Date("2026-09-23T13:00:00.000Z"),
     });
 

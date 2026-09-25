@@ -2,7 +2,7 @@
 import { describe, it, expect, afterAll } from "vitest";
 import { eq } from "drizzle-orm";
 import { db, pool } from "../../src/db/client";
-import { reigns, rounds, roundParticipants, users, sessions } from "../../src/db/schema";
+import { reigns, rounds, bids, users, sessions } from "../../src/db/schema";
 
 describe("schema", () => {
   afterAll(async () => {
@@ -21,24 +21,22 @@ describe("schema", () => {
     await db.delete(reigns).where(eq(reigns.id, inserted.id));
   });
 
-  it("can insert and read a round participant, and rejects a duplicate (roundId, bidderId)", async () => {
+  it("can insert and read a bid, and rejects a duplicate paymentRef", async () => {
     const [reign] = await db.insert(reigns).values({ occupantId: "u1", priceCents: 10_000, startedAt: new Date() }).returning();
     const [round] = await db.insert(rounds).values({ reignId: reign.id, startsAt: new Date() }).returning();
 
     const [inserted] = await db
-      .insert(roundParticipants)
-      .values({ roundId: round.id, bidderId: "bidder-1", depositCents: 1_000, depositRef: "pi_1", paymentMethodRef: "pm_1", customerRef: "cus_1" })
+      .insert(bids)
+      .values({ roundId: round.id, bidderId: "bidder-1", amountCents: 11_000, paymentRef: "pi_1" })
       .returning();
-    expect(inserted.depositStatus).toBe("held");
-    // The Stripe Customer the saved PaymentMethod is attached to — without it
-    // the off-session remainder charge cannot reuse that method at all.
-    expect(inserted.customerRef).toBe("cus_1");
+    expect(inserted.refundedAt).toBeNull();
+    expect(inserted.paymentRef).toBe("pi_1");
 
     await expect(
-      db.insert(roundParticipants).values({ roundId: round.id, bidderId: "bidder-1", depositCents: 1_000, depositRef: "pi_2", paymentMethodRef: "pm_2", customerRef: "cus_2" }),
+      db.insert(bids).values({ roundId: round.id, bidderId: "bidder-2", amountCents: 12_000, paymentRef: "pi_1" }),
     ).rejects.toThrow();
 
-    await db.delete(roundParticipants).where(eq(roundParticipants.id, inserted.id));
+    await db.delete(bids).where(eq(bids.id, inserted.id));
     await db.delete(rounds).where(eq(rounds.id, round.id));
     await db.delete(reigns).where(eq(reigns.id, reign.id));
   });

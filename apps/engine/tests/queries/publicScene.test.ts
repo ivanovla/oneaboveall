@@ -79,6 +79,36 @@ describe("getScene", () => {
     expect(scene.champion?.occupantId).toBe(champUser.id);
   });
 
+  it("resolves a real user's social link for the champion and the retinue, null when unset", async () => {
+    const [champUser] = await db
+      .insert(users)
+      .values({ provider: "google", providerId: "g-social-1", email: "champ2@example.com", name: "Champ", socialUrl: "https://x.com/champ" })
+      .returning();
+    const [pastUser] = await db
+      .insert(users)
+      .values({ provider: "apple", providerId: "a-social-1", email: "past2@example.com", name: "Past" })
+      .returning();
+
+    const base = new Date(2026, 0, 1);
+    const day = 24 * 60 * 60 * 1000;
+    await db.insert(reigns).values({
+      occupantId: pastUser.id,
+      priceCents: 100_000,
+      startedAt: base,
+      endedAt: new Date(base.getTime() + day),
+    });
+    await db.insert(reigns).values({
+      occupantId: champUser.id,
+      priceCents: 200_000,
+      startedAt: new Date(base.getTime() + day),
+    });
+
+    const scene = await getScene(new Date(base.getTime() + 2 * day));
+
+    expect(scene.champion?.socialUrl).toBe("https://x.com/champ");
+    expect(scene.retinue[0].socialUrl).toBeNull(); // pastUser never set one
+  });
+
   // users.name is NOT NULL but not non-empty: Apple only ever sends a name in
   // the unsigned "user" blob on the very first authorization, and authApple.ts
   // stores "" when that blob is missing or unparseable. And plenty of
@@ -154,7 +184,7 @@ describe("getCurrentRoundInfo", () => {
     expect(await getCurrentRoundInfo(new Date())).toBeNull();
   });
 
-  it("returns the round id, phase, leader price, and fixed deposit for the current round", async () => {
+  it("returns the round id, phase, and leader price for the current round", async () => {
     const startsAt = new Date(2026, 0, 1, 0, 0, 0);
     const reign = await createInitialReign("champ", startsAt);
     const round = await getLatestRound(reign.id);
@@ -164,7 +194,6 @@ describe("getCurrentRoundInfo", () => {
     expect(info?.roundId).toBe(round!.id);
     expect(info?.phase).toBe("bidding");
     expect(info?.currentLeaderCents).toBe(reign.priceCents); // no bids yet — leader is the champion's price
-    expect(info?.depositCents).toBe(Math.round(reign.priceCents * 0.10));
     expect(info?.biddingClosesAt).toEqual(new Date(startsAt.getTime() + BIDDING_PHASE_MS));
   });
 });

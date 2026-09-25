@@ -45,6 +45,7 @@ input { font-family: inherit; }
 @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes breathe { 0%, 100% { opacity: .5; } 50% { opacity: 1; } }
+@keyframes spin { to { transform: rotate(360deg); } }
 @keyframes slide-in-right {
   from { transform: translateX(100%); }
   to { transform: translateX(0); }

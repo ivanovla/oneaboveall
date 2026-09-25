@@ -10,7 +10,9 @@ export interface Person {
   // Fixed "1d 4h"-style duration string for a retinue member, whose reign has
   // already ended — never recomputed. Unused for the champion.
   heldLabel: string;
-  instagramUrl?: string;
+  // A link to any social network profile (Instagram, X, TikTok, a personal
+  // site, …) — never restricted to one platform.
+  socialUrl?: string;
 }
 
 export interface Scene {

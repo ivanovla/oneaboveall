@@ -1,11 +1,9 @@
 import { pgTable, text, integer, timestamp, uuid, pgEnum, index, uniqueIndex } from "drizzle-orm/pg-core";
 
-// "applied" = the winner's deposit was credited toward the final price rather
-// than returned; distinct from "refunded" so accounting rollups don't count it
-// as money given back.
-export const depositStatusEnum = pgEnum("deposit_status", ["held", "refunded", "forfeited", "applied"]);
-export const roundPhaseEnum = pgEnum("round_phase", ["bidding", "resolving", "payment", "closed"]);
-export const offerStatusEnum = pgEnum("offer_status", ["pending", "processing", "paid", "expired"]);
+// A round only ever has these two phases now: settlement is synchronous with
+// the bidding window closing (the winner already paid in full when they bid),
+// so there's no intermediate "resolving"/"payment" state to be in.
+export const roundPhaseEnum = pgEnum("round_phase", ["bidding", "closed"]);
 
 export const reigns = pgTable("reigns", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -22,44 +20,25 @@ export const rounds = pgTable("rounds", {
   phase: roundPhaseEnum("phase").notNull().default("bidding"),
 });
 
-// One row per (round, bidder): the fixed, once-per-round deposit that unlocks
-// bidding for that bidder in that round. depositCents is fixed at
-// calculateDeposit(reign.priceCents) when the row is created — never
-// recomputed from any individual bid amount. paymentMethodRef is the saved
-// Stripe PaymentMethod id (captured from the deposit PaymentIntent via
-// setup_future_usage: "off_session"), used later for the automatic
-// off-session remainder charge if this bidder wins. customerRef is the Stripe
-// Customer that PaymentMethod is attached to — Stripe only allows a saved
-// PaymentMethod to be reused in a *later, separate* PaymentIntent (which is
-// exactly what the remainder charge is) when both the original and the reuse
-// name the same Customer. Without it the remainder charge fails with
-// payment_method_unattached, which the engine would misread as a decline.
-export const roundParticipants = pgTable("round_participants", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  roundId: uuid("round_id").notNull().references(() => rounds.id),
-  bidderId: text("bidder_id").notNull(),
-  depositCents: integer("deposit_cents").notNull(),
-  depositRef: text("deposit_ref").notNull(),
-  paymentMethodRef: text("payment_method_ref").notNull(),
-  customerRef: text("customer_ref").notNull(),
-  depositStatus: depositStatusEnum("deposit_status").notNull().default("held"),
-  joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
-}, (table) => ({
-  // Enforces "one deposit per bidder per round" at the database level — this
-  // is what makes joinRound's insert-or-detect-duplicate idempotent against a
-  // Stripe webhook redelivering the same payment_intent.succeeded event.
-  roundBidderIdx: uniqueIndex("round_participants_round_id_bidder_id_idx").on(table.roundId, table.bidderId),
-}));
-
+// Every bid is a real, full-amount Stripe charge collected up front — there
+// is no separate deposit concept. paymentRef is that charge's PaymentIntent
+// id: unique per row so a redelivered `payment_intent.succeeded` webhook is a
+// safe no-op instead of recording the same bid twice. refundedAt is null
+// while the money is still ours (this bid is either the round's current
+// leader, or already won a closed round) and gets set the instant another
+// bidder outbids it — at that point the full amount is handed straight back,
+// there is nothing left to reconcile at round close.
 export const bids = pgTable("bids", {
   id: uuid("id").defaultRandom().primaryKey(),
   roundId: uuid("round_id").notNull().references(() => rounds.id),
   bidderId: text("bidder_id").notNull(),
   amountCents: integer("amount_cents").notNull(),
+  paymentRef: text("payment_ref").notNull(),
+  refundedAt: timestamp("refunded_at", { withTimezone: true }),
   placedAt: timestamp("placed_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   // Supports the leader query (WHERE round_id = ? ORDER BY amount_cents DESC,
-  // placed_at ASC LIMIT 1), which runs inside placeBidAtomic's SERIALIZABLE
+  // placed_at ASC LIMIT 1), which runs inside recordBidAtomic's SERIALIZABLE
   // transaction on every bid — the hottest lock in the system. Column order and
   // direction match that ORDER BY exactly so it can be answered by an index
   // scan instead of a sequential scan plus sort.
@@ -68,23 +47,8 @@ export const bids = pgTable("bids", {
     table.amountCents.desc(),
     table.placedAt.asc(),
   ),
+  paymentRefIdx: uniqueIndex("bids_payment_ref_idx").on(table.paymentRef),
 }));
-
-export const paymentOffers = pgTable("payment_offers", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  roundId: uuid("round_id").notNull().references(() => rounds.id),
-  bidId: uuid("bid_id").notNull().references(() => bids.id),
-  offeredAt: timestamp("offered_at", { withTimezone: true }).notNull(),
-  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-  status: offerStatusEnum("status").notNull().default("pending"),
-});
-
-export const bans = pgTable("bans", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  bidderId: text("bidder_id").notNull(),
-  bannedUntil: timestamp("banned_until", { withTimezone: true }).notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
 
 // A signed-in bidder. provider+providerId is the OAuth identity; id is what
 // the rest of the engine already calls bidderId (its columns are plain
@@ -101,9 +65,17 @@ export const users = pgTable("users", {
   // Both null until the user completes the post-bid photo/social step (see
   // POST /auth/photo, PATCH /auth/social). photoPath is a filename under
   // apps/api's local uploads directory, never a client-supplied path —
-  // resolved server-side only, never joined with user input.
+  // resolved server-side only, never joined with user input. socialUrl is a
+  // link to any social network profile (Instagram, X, TikTok, a personal
+  // site, …) — not restricted to one platform — shown alongside the photo
+  // once this user is the reigning champion.
   photoPath: text("photo_path"),
-  instagramUrl: text("instagram_url"),
+  socialUrl: text("social_url"),
+  // Freeform, optional: how this bidder would like their character rendered
+  // in the scene (clothing, style, mood, …) — captured alongside the photo
+  // upload for whoever composes the scene art, never parsed or acted on by
+  // this codebase itself.
+  characterRequest: text("character_request"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   providerIdentityIdx: uniqueIndex("users_provider_provider_id_idx").on(table.provider, table.providerId),

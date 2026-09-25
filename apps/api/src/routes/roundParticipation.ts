@@ -1,23 +1,18 @@
 import type { FastifyInstance } from "fastify";
-import { getRoundParticipant, getQueueLeader } from "engine/db/repository";
+import { getQueueLeader } from "engine/db/repository";
 import { requireSession } from "../auth/requireSession";
 
 // rounds.id is a Postgres `uuid` column, so querying it with a value that
 // isn't UUID-shaped doesn't return "no rows" — it raises `invalid input syntax
-// for type uuid` and surfaces as a 500 with a database error in the logs. The
-// sibling route POST /rounds/:id/join never has this problem because it
-// compares `:id` against the current round as a plain string before using it
-// in a query; this route queries with it directly, so it has to check the
-// shape itself.
+// for type uuid` and surfaces as a 500 with a database error in the logs.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function registerRoundParticipationRoute(app: FastifyInstance): void {
-  // "Have *I* joined this round?" — the answer is always about the session
-  // user. The bidder id is never taken from the URL or the query string, so
-  // this cannot be turned into a probe for whether some other bidder has
-  // joined. The round id is caller-supplied, but a bidder's own join status
-  // for an arbitrary round is not sensitive: for a round they never joined the
-  // answer is simply false.
+  // "Am *I* the current leader of this round?" — the frontend uses this to
+  // disable Displace for a user who's already leading (a fresh bid must
+  // outbid someone else first; you can't raise your own standing bid). The
+  // bidder id is never taken from the URL or the query string, so this
+  // cannot be turned into a probe for who else is leading.
   app.get<{ Params: { id: string } }>("/rounds/:id/me", async (request, reply) => {
     const user = await requireSession(request, reply);
     if (!user) return;
@@ -28,20 +23,7 @@ export function registerRoundParticipationRoute(app: FastifyInstance): void {
       return { error: "invalid round id" };
     }
 
-    const participant = await getRoundParticipant(roundId, user.id);
-    if (!participant) {
-      return { joined: false };
-    }
-
-    // "Leading" answers whether the queue's current top bid is this user's
-    // own — not whether they've ever placed one. A participant who joined
-    // but never bid is correctly "not leading" (there's nothing to be
-    // outbid on yet), the same as one who bid and was overtaken.
     const leader = await getQueueLeader(roundId);
-    return {
-      joined: true,
-      depositCents: participant.depositCents,
-      isLeading: leader?.bidderId === user.id,
-    };
+    return { isLeading: leader?.bidderId === user.id };
   });
 }

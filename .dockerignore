@@ -1,0 +1,14 @@
+.git
+.worktrees
+.superpowers
+node_modules
+**/node_modules
+dist
+**/dist
+docs
+apps/api/uploads
+infra/secrets
+.env
+**/.env
+*.p8
+!apps/web/.env.production

@@ -19,11 +19,11 @@
     "jose": "^5.9.6",
     "openid-client": "^5.7.1",
     "secure-json-parse": "^2.7.0",
-    "stripe": "^17.4.0"
+    "stripe": "^17.4.0",
+    "tsx": "^4.19.0"
   },
   "devDependencies": {
     "@types/node": "^22.5.0",
-    "tsx": "^4.19.0",
     "typescript": "^5.5.4",
     "vitest": "^2.0.5"
   }

@@ -16,9 +16,19 @@ export async function createSession(userId: string): Promise<{ token: string; ex
 
 export async function getUserBySessionToken(
   token: string,
-): Promise<{ id: string; email: string; name: string; photoPath: string | null; instagramUrl: string | null } | null> {
+): Promise<
+  | { id: string; email: string; name: string; photoPath: string | null; socialUrl: string | null; characterRequest: string | null }
+  | null
+> {
   const [row] = await db
-    .select({ id: users.id, email: users.email, name: users.name, photoPath: users.photoPath, instagramUrl: users.instagramUrl })
+    .select({
+      id: users.id,
+      email: users.email,
+      name: users.name,
+      photoPath: users.photoPath,
+      socialUrl: users.socialUrl,
+      characterRequest: users.characterRequest,
+    })
     .from(sessions)
     .innerJoin(users, eq(sessions.userId, users.id))
     .where(and(eq(sessions.token, token), gt(sessions.expiresAt, new Date())))

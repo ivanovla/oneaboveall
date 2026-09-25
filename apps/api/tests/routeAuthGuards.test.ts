@@ -32,7 +32,6 @@ afterAll(async () => {
 });
 
 const guarded = [
-  { method: "POST" as const, url: "/rounds/round-1/join", payload: {} },
   { method: "POST" as const, url: "/bids", payload: { amountCents: 11_000 } },
   { method: "GET" as const, url: "/rounds/round-1/me" },
 ];
@@ -63,13 +62,6 @@ describe("session guard on the money-moving and per-user routes", () => {
   it("a body bidderId does not get an unauthenticated caller past the guard", async () => {
     const app = buildServer();
 
-    const join = await app.inject({
-      method: "POST",
-      url: "/rounds/round-1/join",
-      payload: { bidderId: "victim" },
-    });
-    expect(join.statusCode).toBe(401);
-
     const bid = await app.inject({
       method: "POST",
       url: "/bids",
@@ -98,7 +90,7 @@ describe("session guard on the money-moving and per-user routes", () => {
       headers: { cookie },
     });
     expect(real.statusCode).toBe(200);
-    expect(real.json()).toEqual({ joined: false });
+    expect(real.json()).toEqual({ isLeading: false });
 
     const malformed = await app.inject({ method: "GET", url: "/rounds/not-a-uuid/me", headers: { cookie } });
     expect(malformed.statusCode).toBe(400);

@@ -1,0 +1,107 @@
+# TLS via cert-manager's letsencrypt-prod ClusterIssuer, the same pattern
+# job-link-boil uses elsewhere on this cluster (see infra/proxy-ru and the
+# zavodhr.ru Ingress in that repo). VERIFY the exact ClusterIssuer name
+# before the first deploy — run `kubectl get clusterissuer` against the
+# cluster — and edit the annotation below if it differs from
+# "letsencrypt-prod".
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: redirect
+  namespace: oneabobeall
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: oneabobeall-ingress
+  namespace: oneabobeall
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - oneabobeall.org
+        - www.oneabobeall.org
+        - api.oneabobeall.org
+      secretName: oneabobeall-tls
+  rules:
+    - host: oneabobeall.org
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: oneabobeall-web
+                port:
+                  number: 80
+    - host: www.oneabobeall.org
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: oneabobeall-web
+                port:
+                  number: 80
+    - host: api.oneabobeall.org
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: oneabobeall-api
+                port:
+                  number: 80
+---
+# HTTP Ingress — only redirects plain :80 traffic to https, same convention
+# job-link-boil uses (see infra/k8s/ingress.yaml there).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: oneabobeall-ingress-redirect
+  namespace: oneabobeall
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+    traefik.ingress.kubernetes.io/router.middlewares: oneabobeall-redirect@kubernetescrd
+spec:
+  rules:
+    - host: oneabobeall.org
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: oneabobeall-web
+                port:
+                  number: 80
+    - host: www.oneabobeall.org
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: oneabobeall-web
+                port:
+                  number: 80
+    - host: api.oneabobeall.org
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: oneabobeall-api
+                port:
+                  number: 80
