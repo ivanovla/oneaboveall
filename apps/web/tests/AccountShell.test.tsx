@@ -30,6 +30,7 @@ describe("AccountShell", () => {
     expect(screen.getByText("Sign out")).toBeInTheDocument();
     expect(screen.getByText("Auction")).toBeInTheDocument();
     expect(screen.getByText("Leaderboard")).toBeInTheDocument();
+    expect(screen.getByText("oneabobeall")).toHaveAttribute("href", "/");
   });
 
   it("calls fetch with credentials: include for the session check", async () => {

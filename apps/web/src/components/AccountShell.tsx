@@ -172,7 +172,9 @@ export default function AccountShell({
   return (
     <div style={{ minHeight: "100vh", background: "var(--void)", color: "var(--fg)" }}>
       <div style={headerStyle}>
-        <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: 20 }}>oneabobeall</div>
+        <a href="/" style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: 20, color: "var(--fg)" }}>
+          oneabobeall
+        </a>
         <div style={navStyle}>
           <a href="/account/auction">Auction</a>
           <a href="/account/leaderboard">Leaderboard</a>
