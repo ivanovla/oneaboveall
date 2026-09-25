@@ -104,6 +104,67 @@ describe("PATCH /auth/email", () => {
   });
 });
 
+describe("PATCH /auth/social", () => {
+  it("returns 401 with no session cookie", async () => {
+    const app = buildServer();
+    const response = await app.inject({ method: "PATCH", url: "/auth/social", payload: { instagramUrl: "https://instagram.com/someone" } });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("saves a valid Instagram profile URL", async () => {
+    const [user] = await db.insert(users).values({ provider: "google", providerId: "g-6", email: "f@example.com", name: "F" }).returning();
+    const { token } = await createSession(user.id);
+
+    const app = buildServer();
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/auth/social",
+      headers: { cookie: `oneabobeall_session=${token}` },
+      payload: { instagramUrl: "https://instagram.com/someone" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ instagramUrl: "https://instagram.com/someone" });
+    const [row] = await db.select().from(users).where(eq(users.id, user.id));
+    expect(row.instagramUrl).toBe("https://instagram.com/someone");
+  });
+
+  it("clears a previously-set link when given an empty string", async () => {
+    const [user] = await db.insert(users).values({ provider: "google", providerId: "g-7", email: "g@example.com", name: "G", instagramUrl: "https://instagram.com/old" }).returning();
+    const { token } = await createSession(user.id);
+
+    const app = buildServer();
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/auth/social",
+      headers: { cookie: `oneabobeall_session=${token}` },
+      payload: { instagramUrl: "" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ instagramUrl: null });
+    const [row] = await db.select().from(users).where(eq(users.id, user.id));
+    expect(row.instagramUrl).toBeNull();
+  });
+
+  it("rejects a non-Instagram URL with 400, and does not touch the stored value", async () => {
+    const [user] = await db.insert(users).values({ provider: "google", providerId: "g-8", email: "h@example.com", name: "H", instagramUrl: "https://instagram.com/old" }).returning();
+    const { token } = await createSession(user.id);
+
+    const app = buildServer();
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/auth/social",
+      headers: { cookie: `oneabobeall_session=${token}` },
+      payload: { instagramUrl: "https://evil.example.com/phish" },
+    });
+
+    expect(response.statusCode).toBe(400);
+    const [row] = await db.select().from(users).where(eq(users.id, user.id));
+    expect(row.instagramUrl).toBe("https://instagram.com/old");
+  });
+});
+
 describe("POST /auth/logout", () => {
   it("clears the session cookie and the sessions row", async () => {
     const [user] = await db.insert(users).values({ provider: "google", providerId: "g-2", email: "b@example.com", name: "B" }).returning();

@@ -22,7 +22,7 @@ import { getUserBySessionToken, SESSION_COOKIE_NAME } from "./session";
 export async function requireSession(
   request: FastifyRequest,
   reply: FastifyReply,
-): Promise<{ id: string; email: string; name: string } | null> {
+): Promise<{ id: string; email: string; name: string; photoPath: string | null; instagramUrl: string | null } | null> {
   const token = request.cookies[SESSION_COOKIE_NAME];
   const user = token ? await getUserBySessionToken(token) : null;
   if (!user) {

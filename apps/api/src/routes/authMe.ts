@@ -12,6 +12,12 @@ import { eq } from "drizzle-orm";
 // which nothing here can check synchronously anyway.
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// Deliberately narrow to Instagram profile URLs specifically (not "any
+// URL") to match what the champion card actually renders as a link label —
+// broadening this to arbitrary social links is a real future need, not
+// solved here.
+const INSTAGRAM_URL_RE = /^https:\/\/(www\.)?instagram\.com\/[A-Za-z0-9_.]+\/?$/;
+
 export function registerAuthMeRoutes(app: FastifyInstance): void {
   app.get("/auth/me", async (request, reply) => {
     const token = request.cookies[SESSION_COOKIE_NAME];
@@ -40,6 +46,28 @@ export function registerAuthMeRoutes(app: FastifyInstance): void {
 
     await db.update(users).set({ email }).where(eq(users.id, user.id));
     return { id: user.id, email, name: user.name };
+  });
+
+  // Optional — lets a signed-in user attach (or, with an empty string,
+  // clear) an Instagram profile link, shown alongside their photo once
+  // they're the reigning champion. Never required to finish the
+  // photo/social step in the frontend flow.
+  app.patch<{ Body: { instagramUrl?: unknown } }>("/auth/social", async (request, reply) => {
+    const user = await requireSession(request, reply);
+    if (!user) return;
+
+    const instagramUrl = request.body?.instagramUrl;
+    if (instagramUrl === "") {
+      await db.update(users).set({ instagramUrl: null }).where(eq(users.id, user.id));
+      return { instagramUrl: null };
+    }
+    if (typeof instagramUrl !== "string" || !INSTAGRAM_URL_RE.test(instagramUrl)) {
+      reply.code(400);
+      return { error: "a valid Instagram profile URL is required" };
+    }
+
+    await db.update(users).set({ instagramUrl }).where(eq(users.id, user.id));
+    return { instagramUrl };
   });
 
   app.post("/auth/logout", async (request, reply) => {

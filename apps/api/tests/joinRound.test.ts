@@ -36,7 +36,7 @@ vi.mock("../src/stripeClient", () => ({
 // tests/auth/requireSession.test.ts, and the unmocked 401 wiring for this
 // route by tests/routeAuthGuards.test.ts.
 vi.mock("../src/auth/requireSession", () => ({
-  requireSession: vi.fn(async () => ({ id: "challenger", email: "c@example.com", name: "C" })),
+  requireSession: vi.fn(async () => ({ id: "challenger", email: "c@example.com", name: "C", photoPath: null, instagramUrl: null })),
 }));
 
 describe("POST /rounds/:id/join", () => {
@@ -216,7 +216,7 @@ describe("POST /rounds/:id/join", () => {
     // placeBid would reject every bid this bidder attempts, so the deposit
     // would just sit charged until the round closed and refunded it.
     vi.mocked(isBanned).mockResolvedValueOnce(true);
-    vi.mocked(requireSession).mockResolvedValueOnce({ id: "banned-guy", email: "b@example.com", name: "B" });
+    vi.mocked(requireSession).mockResolvedValueOnce({ id: "banned-guy", email: "b@example.com", name: "B", photoPath: null, instagramUrl: null });
 
     const app = buildServer();
     const response = await app.inject({ method: "POST", url: "/rounds/round-1/join" });

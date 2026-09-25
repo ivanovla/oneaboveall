@@ -98,6 +98,12 @@ export const users = pgTable("users", {
   providerId: text("provider_id").notNull(),
   email: text("email").notNull(),
   name: text("name").notNull(),
+  // Both null until the user completes the post-bid photo/social step (see
+  // POST /auth/photo, PATCH /auth/social). photoPath is a filename under
+  // apps/api's local uploads directory, never a client-supplied path —
+  // resolved server-side only, never joined with user input.
+  photoPath: text("photo_path"),
+  instagramUrl: text("instagram_url"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   providerIdentityIdx: uniqueIndex("users_provider_provider_id_idx").on(table.provider, table.providerId),

@@ -18,7 +18,7 @@ vi.mock("engine/engine/placeBid", () => ({
 // DB-backed cookie→user lookup is covered by tests/auth/requireSession.test.ts,
 // and the unmocked 401 wiring for this route by tests/routeAuthGuards.test.ts.
 vi.mock("../src/auth/requireSession", () => ({
-  requireSession: vi.fn(async () => ({ id: "challenger", email: "c@example.com", name: "C" })),
+  requireSession: vi.fn(async () => ({ id: "challenger", email: "c@example.com", name: "C", photoPath: null, instagramUrl: null })),
 }));
 
 describe("POST /bids", () => {

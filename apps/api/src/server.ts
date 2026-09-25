@@ -3,6 +3,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import fastifyCookie from "@fastify/cookie";
 import fastifyCors from "@fastify/cors";
 import fastifyFormbody from "@fastify/formbody";
+import fastifyMultipart from "@fastify/multipart";
 import secureJson from "secure-json-parse";
 import { registerSceneRoute } from "./routes/scene";
 import { registerLeaderboardRoute } from "./routes/leaderboard";
@@ -14,6 +15,7 @@ import { registerStripeWebhookRoute } from "./routes/stripeWebhook";
 import { registerGoogleAuthRoutes } from "./routes/authGoogle";
 import { registerAppleAuthRoutes } from "./routes/authApple";
 import { registerAuthMeRoutes } from "./routes/authMe";
+import { registerPhotoRoutes } from "./routes/photo";
 import { stripe, STRIPE_CURRENCY, STRIPE_WEBHOOK_SECRET } from "./stripeClient";
 import { StripePaymentProvider } from "./payments/StripePaymentProvider";
 
@@ -100,6 +102,10 @@ export function buildServer(): FastifyInstance {
   // @fastify/cookie/@fastify/cors above rather than hand-rolling that
   // plumbing).
   app.register(fastifyFormbody);
+  // POST /auth/photo's multipart/form-data upload — the photo file itself,
+  // capped well under Node's default heap pressure point for a single
+  // request.
+  app.register(fastifyMultipart, { limits: { fileSize: 12 * 1024 * 1024 } });
 
   // Captures the raw request bytes onto request.rawBody in addition to the
   // normal parsed JSON body — Stripe's webhook signature check needs the
@@ -148,6 +154,7 @@ export function buildServer(): FastifyInstance {
   registerGoogleAuthRoutes(app);
   registerAppleAuthRoutes(app);
   registerAuthMeRoutes(app);
+  registerPhotoRoutes(app);
 
   return app;
 }

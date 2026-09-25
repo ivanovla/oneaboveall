@@ -8,7 +8,7 @@ vi.mock("../src/stripeClient", () => ({
 }));
 
 vi.mock("../src/auth/requireSession", () => ({
-  requireSession: vi.fn(async () => ({ id: "bidder-1", email: "a@example.com", name: "A" })),
+  requireSession: vi.fn(async () => ({ id: "bidder-1", email: "a@example.com", name: "A", photoPath: null, instagramUrl: null })),
 }));
 
 // Only "bidder-1" has a participant row. The getCurrentReign / getLatestRound
@@ -60,7 +60,7 @@ describe("GET /rounds/:id/me", () => {
   // *caller*, not on whether anyone at all has joined the round.
   it("returns joined: false when they don't", async () => {
     const { requireSession } = await import("../src/auth/requireSession");
-    vi.mocked(requireSession).mockResolvedValueOnce({ id: "someone-else", email: "x@example.com", name: "X" });
+    vi.mocked(requireSession).mockResolvedValueOnce({ id: "someone-else", email: "x@example.com", name: "X", photoPath: null, instagramUrl: null });
 
     const app = buildServer();
     const response = await app.inject({ method: "GET", url: `/rounds/${ROUND_ID}/me` });
