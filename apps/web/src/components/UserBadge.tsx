@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import LiveAuction from "./LiveAuction";
 import LeaderboardTable from "./LeaderboardTable";
 
 type SessionUser = { id: string; email: string; name: string };
-type SidebarTab = "auction" | "leaderboard";
 
 const POLL_INTERVAL_MS = 5_000;
 
@@ -44,15 +42,13 @@ const sidebarOverlayStyle: React.CSSProperties = {
   backdropFilter: "blur(6px)",
 };
 
-// Wide enough for LiveAuction's own 420px-capped card plus the panel's own
-// side padding, so its content never feels squeezed.
 const sidebarPanelStyle: React.CSSProperties = {
   position: "fixed",
   top: 0,
   right: 0,
   bottom: 0,
   zIndex: 61,
-  width: "min(460px, 100vw)",
+  width: "min(360px, 100vw)",
   background: "var(--panel)",
   borderLeft: "1px solid var(--line)",
   boxShadow: "-40px 0 120px rgba(0,0,0,.6)",
@@ -68,19 +64,6 @@ const sidebarHeaderStyle: React.CSSProperties = {
   padding: "16px 20px",
   borderBottom: "1px solid var(--line)",
 };
-
-function tabButtonStyle(active: boolean): React.CSSProperties {
-  return {
-    flex: 1,
-    padding: "10px 12px",
-    fontSize: 11,
-    letterSpacing: ".14em",
-    textTransform: "uppercase",
-    border: `1px solid ${active ? "var(--gold)" : "var(--line)"}`,
-    background: active ? "var(--gold)" : "var(--panel-2)",
-    color: active ? "var(--btn-fg)" : "var(--fg-dim)",
-  };
-}
 
 function EmailConfirmStep({
   apiBaseUrl,
@@ -155,37 +138,21 @@ function EmailConfirmStep({
  * vast majority of visitors.
  *
  * Signed in, it shows an initial-letter avatar that opens a right-side
- * sidebar — account identity, a tab switcher between the real Auction
- * (LiveAuction.tsx) and Leaderboard (LeaderboardTable.tsx) content, and sign
- * out — over whatever page you're already on. There is no separate
- * /account/auction or /account/leaderboard page anymore: this sidebar is the
- * one place that content renders, opened either from the badge itself or
- * (for an already-signed-in visitor) from AuctionFlow's Displace button,
- * which is why the open/tab state is owned by the parent and passed in
- * rather than kept internal.
+ * settings sidebar — account identity, the leaderboard, and sign out — over
+ * whatever page you're already on. The actual bid/deposit flow lives
+ * elsewhere now (AuctionFlow's own Displace button opens BidFlow.tsx
+ * directly), not in this sidebar — this one is just account settings plus
+ * a read-only leaderboard.
  *
  * Also handles the one-time post-signup email-confirmation step (the
  * `?welcome=1` the OAuth callbacks redirect new signups to), and the
  * shaking red notification dot when this user has joined the current round
- * but isn't the one currently leading it — the same `isLeading` field
- * LiveAuction.tsx itself uses, so the two surfaces can never disagree about
- * what "needs your attention" means.
+ * but isn't the one currently leading it.
  */
-export default function UserBadge({
-  apiBaseUrl,
-  sidebarOpen,
-  onSidebarOpenChange,
-  activeTab,
-  onActiveTabChange,
-}: {
-  apiBaseUrl: string;
-  sidebarOpen: boolean;
-  onSidebarOpenChange: (open: boolean) => void;
-  activeTab: SidebarTab;
-  onActiveTabChange: (tab: SidebarTab) => void;
-}) {
+export default function UserBadge({ apiBaseUrl }: { apiBaseUrl: string }) {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [notify, setNotify] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [awaitingEmailConfirm, setAwaitingEmailConfirm] = useState(false);
   const cancelledRef = useRef(false);
   const welcomeCheckedRef = useRef(false);
@@ -217,7 +184,7 @@ export default function UserBadge({
           welcomeCheckedRef.current = true;
           if (new URLSearchParams(window.location.search).get("welcome") === "1") {
             setAwaitingEmailConfirm(true);
-            onSidebarOpenChange(true);
+            setSidebarOpen(true);
           }
         }
 
@@ -282,11 +249,11 @@ export default function UserBadge({
   useEffect(() => {
     if (!sidebarOpen || awaitingEmailConfirm) return;
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") onSidebarOpenChange(false);
+      if (e.key === "Escape") setSidebarOpen(false);
     }
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [sidebarOpen, awaitingEmailConfirm, onSidebarOpenChange]);
+  }, [sidebarOpen, awaitingEmailConfirm]);
 
   function signOut() {
     fetch(`${apiBaseUrl}/auth/logout`, { method: "POST", credentials: "include" }).finally(() => {
@@ -314,7 +281,7 @@ export default function UserBadge({
   return (
     <>
       <button
-        onClick={() => onSidebarOpenChange(true)}
+        onClick={() => setSidebarOpen(true)}
         style={{ ...badgeButtonStyle, animation: notify ? "badge-shake 3s ease-in-out infinite" : undefined }}
         aria-label={notify ? `${user.name || "Account"} — action needed` : user.name || "Account"}
       >
@@ -324,7 +291,7 @@ export default function UserBadge({
 
       {sidebarOpen && (
         <>
-          {!awaitingEmailConfirm && <div style={sidebarOverlayStyle} onClick={() => onSidebarOpenChange(false)} />}
+          {!awaitingEmailConfirm && <div style={sidebarOverlayStyle} onClick={() => setSidebarOpen(false)} />}
           <div style={sidebarPanelStyle} role="dialog" aria-label="Account settings">
             {awaitingEmailConfirm ? (
               <EmailConfirmStep apiBaseUrl={apiBaseUrl} initialEmail={user.email} onDone={finishEmailConfirm} />
@@ -335,7 +302,7 @@ export default function UserBadge({
                     Settings
                   </div>
                   <button
-                    onClick={() => onSidebarOpenChange(false)}
+                    onClick={() => setSidebarOpen(false)}
                     style={{ fontSize: 11, letterSpacing: ".16em", textTransform: "uppercase", color: "var(--fg-faint)" }}
                   >
                     Close
@@ -349,17 +316,12 @@ export default function UserBadge({
                   <div style={{ marginTop: 4, fontSize: 12, color: "var(--fg-dim)" }}>{user.email}</div>
                 </div>
 
-                <div style={{ display: "flex", gap: 8, padding: "20px 20px 0" }}>
-                  <button onClick={() => onActiveTabChange("auction")} style={tabButtonStyle(activeTab === "auction")}>
-                    Auction
-                  </button>
-                  <button onClick={() => onActiveTabChange("leaderboard")} style={tabButtonStyle(activeTab === "leaderboard")}>
-                    Leaderboard
-                  </button>
+                <div style={{ marginTop: 20, fontSize: 9, letterSpacing: ".28em", textTransform: "uppercase", color: "var(--gold)", padding: "0 20px" }}>
+                  Leaderboard
                 </div>
 
                 <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
-                  {activeTab === "auction" ? <LiveAuction apiBaseUrl={apiBaseUrl} /> : <LeaderboardTable apiBaseUrl={apiBaseUrl} />}
+                  <LeaderboardTable apiBaseUrl={apiBaseUrl} />
                 </div>
 
                 <div style={{ padding: 20, borderTop: "1px solid var(--line)" }}>

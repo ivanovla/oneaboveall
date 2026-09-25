@@ -1,55 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { loadStripe, type Stripe as StripeClient, type Appearance } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { formatMoney } from "../lib/format";
-
-// Mirrors tokens.css's dark-theme palette (the account pages don't expose
-// the homepage's light/dark toggle, so they always render dark). Stripe's
-// Appearance API needs literal color values, not CSS custom properties, so
-// these are copied rather than read from the stylesheet — keep them in sync
-// with tokens.css's `:root` block by hand if that palette ever changes.
-const stripeAppearance: Appearance = {
-  theme: "night",
-  variables: {
-    colorPrimary: "#c9a45c", // --gold
-    colorBackground: "#15110a", // opaque stand-in for --panel-2 over --void
-    colorText: "#f0e7d6", // --fg
-    colorTextSecondary: "rgba(240, 231, 214, .56)", // --fg-dim
-    colorTextPlaceholder: "rgba(240, 231, 214, .3)", // --fg-faint
-    colorDanger: "#e0483e",
-    fontFamily: "Manrope, Helvetica, Arial, sans-serif",
-    fontSizeBase: "14px",
-    borderRadius: "0px", // this design never rounds a corner
-    spacingUnit: "4px",
-  },
-  rules: {
-    ".Label": {
-      fontSize: "9px",
-      letterSpacing: ".16em",
-      textTransform: "uppercase",
-      color: "rgba(240, 231, 214, .3)",
-    },
-    ".Input": {
-      border: "1px solid rgba(201, 164, 92, .34)", // --gold-soft
-      boxShadow: "none",
-    },
-    ".Input:focus": {
-      border: "1px solid #c9a45c",
-      boxShadow: "none",
-    },
-    ".Tab": {
-      border: "1px solid rgba(201, 164, 92, .22)", // --line
-      boxShadow: "none",
-    },
-    ".Tab:hover": {
-      border: "1px solid rgba(201, 164, 92, .34)",
-    },
-    ".Tab--selected": {
-      border: "1px solid #c9a45c",
-      boxShadow: "none",
-    },
-  },
-};
+import { getStripe, stripeAppearance } from "../lib/stripe";
+import { toBidInputValue, toWholeDollarCents } from "../lib/bidInput";
 
 type CurrentRoundInfo = {
   roundId: string;
@@ -113,14 +66,6 @@ const primaryButtonStyle: React.CSSProperties = {
  */
 function redirectToSignedOut(): void {
   window.location.href = "/";
-}
-
-let stripePromise: Promise<StripeClient | null> | null = null;
-function getStripe(): Promise<StripeClient | null> {
-  if (!stripePromise) {
-    stripePromise = loadStripe(import.meta.env.PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "");
-  }
-  return stripePromise;
 }
 
 function JoinPaymentForm({ apiBaseUrl, roundId, onJoined }: { apiBaseUrl: string; roundId: string; onJoined: () => void }) {
@@ -205,51 +150,6 @@ function JoinPaymentForm({ apiBaseUrl, roundId, onJoined }: { apiBaseUrl: string
       )}
     </div>
   );
-}
-
-/**
- * What the bid field is allowed to display as the user types: digits plus at
- * most one decimal point.
- *
- * The decimal point is deliberately NOT stripped here. This input is a
- * controlled component (`value={bidValue}`), so every keystroke's onChange
- * sees the *previous accepted value* with one character inserted — not the
- * user's full intent. Any rule that drops the "." therefore drops it again on
- * every subsequent keystroke, and the digits after it simply append to the
- * digits before it. Typing "15.50" one character at a time under a
- * strip-the-dot rule goes "1" -> "15" -> "15" -> "155" -> "1550", which is
- * the original 100x bug, reproduced keystroke by keystroke. A single
- * whole-string change event hides this completely, which is why the earlier
- * truncate-at-first-non-digit attempt looked fixed and was not.
- *
- * So the field simply shows what was typed, and the whole-dollar rounding
- * happens once, at submit time, in `toWholeDollarCents` below.
- */
-function toBidInputValue(raw: string): string {
-  const cleaned = raw.replace(/[^\d.]/g, "");
-  const firstDot = cleaned.indexOf(".");
-  if (firstDot === -1) return cleaned;
-  // Keep the first ".", drop any later ones, so "1.5.5" can't reach parseFloat.
-  return `${cleaned.slice(0, firstDot + 1)}${cleaned.slice(firstDot + 1).replace(/\./g, "")}`;
-}
-
-/**
- * Converts the displayed field value to the whole-dollar amount in cents that
- * actually gets bid.
- *
- * Whole-dollar bidding is this site's existing convention (`AuctionFlow.tsx`
- * works the same way) and isn't in question — cents are never accepted. What
- * changed is how a typed decimal collapses to one: flooring "15.50" gives
- * $15, the honest reading of what the user typed and visibly what the field
- * shows, instead of the $1,550 that digit-concatenation produced.
- *
- * An empty field, a lone ".", or anything else parseFloat can't read yields
- * 0 — the same guard the previous `digits === "" ? 0 : ...` provided, so an
- * empty bid still reaches the server and gets its normal validation error.
- */
-function toWholeDollarCents(raw: string): number {
-  const parsed = Number.parseFloat(raw);
-  return Number.isFinite(parsed) ? Math.floor(parsed) * 100 : 0;
 }
 
 function BidForm({ apiBaseUrl, currentLeaderCents }: { apiBaseUrl: string; currentLeaderCents: number }) {

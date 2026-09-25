@@ -2,8 +2,8 @@ import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import AuctionFlow from "../src/components/AuctionFlow";
 
-// The account sidebar's Auction tab renders the real LiveAuction, which
-// imports these — same mocks as LiveAuction.test.tsx/UserBadge.test.tsx.
+// The Displace overlay's "bid" screen renders the real BidFlow, which
+// imports these — same mocks as LiveAuction.test.tsx/BidFlow.test.tsx.
 vi.mock("@stripe/stripe-js", () => ({
   loadStripe: vi.fn(async () => ({
     confirmPayment: vi.fn(async () => ({ error: undefined })),
@@ -18,7 +18,7 @@ vi.mock("@stripe/react-stripe-js", () => ({
 }));
 
 // AuctionFlow checks /auth/me on mount (to route an already-signed-in
-// Displace click to the account sidebar) — real Node fetch is global even
+// Displace click straight to BidFlow) — real Node fetch is global even
 // under jsdom, so without a mock every test would fire a real network
 // request. Defaults to signed-out (401), matching the common case; tests
 // exercising the signed-in path override this per-test.
@@ -69,8 +69,8 @@ describe("AuctionFlow", () => {
   // entry points (GET /auth/google, GET /auth/apple) — not client-side
   // handlers — so the browser follows Google/Apple's own redirect chain and
   // lands back on /. No mock sign-in screen exists anymore; the real
-  // bid/deposit flow lives in the account sidebar's Auction tab
-  // (LiveAuction.tsx, see UserBadge.tsx) once signed in.
+  // bid/deposit flow lives in the same Displace overlay's "bid" screen
+  // (BidFlow.tsx) once signed in.
   it("wires Continue with Google/Apple to the live API's OAuth entry points", () => {
     render(<AuctionFlow apiBaseUrl="http://api.test" />);
     fireEvent.click(screen.getByText("Displace"));
@@ -100,7 +100,7 @@ describe("AuctionFlow — already signed in", () => {
     window.location = originalLocation;
   });
 
-  it("opens the account sidebar on the Auction tab for an already-signed-in visitor, instead of the sign-in screen", async () => {
+  it("opens the Displace bid flow directly for an already-signed-in visitor, instead of the sign-in screen", async () => {
     global.fetch = vi.fn(async (url: string) => {
       const path = new URL(url).pathname;
       if (path === "/auth/me") return { ok: true, status: 200, json: async () => ({ id: "u1", email: "a@example.com", name: "A" }) };
@@ -115,8 +115,9 @@ describe("AuctionFlow — already signed in", () => {
 
     fireEvent.click(screen.getByText("Displace"));
 
-    expect(screen.getByRole("dialog", { name: /account settings/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Auction" })).toHaveStyle({ background: "var(--gold)" });
+    // BidFlow's own loading, then "no round" state — confirms the real
+    // component is embedded directly in this overlay, not a sidebar link.
+    await waitFor(() => expect(screen.getByText(/no active round/i)).toBeInTheDocument());
     expect(screen.queryByText("Sign in to claim the seat")).not.toBeInTheDocument();
   });
 

@@ -3,8 +3,9 @@ import { formatMoney, formatCountdown } from "../lib/format";
 import { mockCurrentPriceCents, mockBiddingWindowClosesAt, mockReferenceNow, mockLeaderboard } from "../lib/mockData";
 import type { LeaderboardRow } from "../lib/types";
 import UserBadge from "./UserBadge";
+import BidFlow from "./BidFlow";
 
-type Screen = "closed" | "auth" | "top";
+type Screen = "closed" | "auth" | "bid" | "top";
 
 /**
  * Renders `closesAt` as a live HH:MM:SS countdown.
@@ -34,9 +35,9 @@ type Screen = "closed" | "auth" | "top";
  *    KNOWN GAP — deliberate, tracked. The API exposes only `getScene` /
  *    `getLeaderboard`; there is no round state fetch on the public homepage,
  *    so this countdown is still a demo figure rather than a real bidding
- *    window close time. The real bidding/deposit flow lives in the account
- *    sidebar's Auction tab (LiveAuction.tsx, rendered by UserBadge.tsx),
- *    which polls the real `GET /current-round` for a real `biddingClosesAt`.
+ *    window close time. The real bidding/deposit flow lives in the
+ *    Displace overlay's "bid" screen (BidFlow.tsx), which fetches the real
+ *    `GET /current-round` for a real `biddingClosesAt`.
  *
  * The ticking is driven by elapsed real time since mount rather than by
  * counting interval fires, so a throttled background tab resumes at the right
@@ -230,11 +231,6 @@ export default function AuctionFlow({
   // since a signed-out visitor is by far the common case and the check
   // resolves in well under the time it takes to actually click the button.
   const [signedIn, setSignedIn] = useState(false);
-  // Owned here (not inside UserBadge) so Displace can open the sidebar
-  // straight to the Auction tab for an already-signed-in visitor, not just
-  // the badge's own click handler.
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [sidebarTab, setSidebarTab] = useState<"auction" | "leaderboard">("auction");
   const theme = useThemeToggle();
   const clock = useCountdown(mockBiddingWindowClosesAt);
   const priceLabel = formatMoney(currentPriceCents);
@@ -257,16 +253,10 @@ export default function AuctionFlow({
     setScreen("closed");
   }
 
-  // Already signed in — the real bid/deposit flow lives in the account
-  // sidebar's Auction tab, so Displace opens that directly instead of
-  // showing sign-in links a signed-in visitor has no use for.
+  // Already signed in — go straight to the bid entry, skipping the sign-in
+  // links a signed-in visitor has no use for.
   function handleDisplace() {
-    if (signedIn) {
-      setSidebarTab("auction");
-      setSidebarOpen(true);
-      return;
-    }
-    setScreen("auth");
+    setScreen(signedIn ? "bid" : "auth");
   }
 
   return (
@@ -288,13 +278,7 @@ export default function AuctionFlow({
         <button onClick={() => setScreen("top")} style={chromeButtonStyle}>
           Leaderboard
         </button>
-        <UserBadge
-          apiBaseUrl={apiBaseUrl}
-          sidebarOpen={sidebarOpen}
-          onSidebarOpenChange={setSidebarOpen}
-          activeTab={sidebarTab}
-          onActiveTabChange={setSidebarTab}
-        />
+        <UserBadge apiBaseUrl={apiBaseUrl} />
       </div>
       <div
         style={{
@@ -384,6 +368,12 @@ export default function AuctionFlow({
           <div style={{ marginTop: 18, fontSize: 11, lineHeight: 1.6, color: "var(--fg-faint)" }}>
             Terms of participation and deposit rules are on the rules page.
           </div>
+        </OverlayShell>
+      )}
+
+      {screen === "bid" && (
+        <OverlayShell stepLabel="Displace" onClose={closeOverlay}>
+          <BidFlow apiBaseUrl={apiBaseUrl} onDone={closeOverlay} />
         </OverlayShell>
       )}
 

@@ -1,23 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
-import { useState } from "react";
 import UserBadge from "../src/components/UserBadge";
-
-// UserBadge's Auction tab renders the real LiveAuction, which imports these
-// — same mocks as LiveAuction.test.tsx itself, needed here too now that
-// it's no longer a separate page but embedded directly in the sidebar.
-vi.mock("@stripe/stripe-js", () => ({
-  loadStripe: vi.fn(async () => ({
-    confirmPayment: vi.fn(async () => ({ error: undefined })),
-  })),
-}));
-
-vi.mock("@stripe/react-stripe-js", () => ({
-  Elements: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  PaymentElement: () => <div data-testid="payment-element" />,
-  useStripe: () => ({ confirmPayment: vi.fn(async () => ({ error: undefined })) }),
-  useElements: () => ({}),
-}));
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -63,27 +46,10 @@ function mockFetch(handlers: {
   });
 }
 
-// UserBadge's open/tab state is owned by its parent (AuctionFlow in
-// production) — this small harness stands in for that parent so each test
-// can drive/observe it without pulling in the whole of AuctionFlow.
-function Harness({ apiBaseUrl }: { apiBaseUrl: string }) {
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<"auction" | "leaderboard">("auction");
-  return (
-    <UserBadge
-      apiBaseUrl={apiBaseUrl}
-      sidebarOpen={sidebarOpen}
-      onSidebarOpenChange={setSidebarOpen}
-      activeTab={activeTab}
-      onActiveTabChange={setActiveTab}
-    />
-  );
-}
-
 describe("UserBadge", () => {
   it("renders nothing when signed out", async () => {
     global.fetch = mockFetch({}) as unknown as typeof fetch;
-    const { container } = render(<Harness apiBaseUrl="http://api.test" />);
+    const { container } = render(<UserBadge apiBaseUrl="http://api.test" />);
     await waitFor(() => expect(global.fetch).toHaveBeenCalled());
     expect(container).toBeEmptyDOMElement();
   });
@@ -92,14 +58,14 @@ describe("UserBadge", () => {
     global.fetch = vi.fn(async () => {
       throw new Error("network down");
     }) as unknown as typeof fetch;
-    const { container } = render(<Harness apiBaseUrl="http://api.test" />);
+    const { container } = render(<UserBadge apiBaseUrl="http://api.test" />);
     await waitFor(() => expect(global.fetch).toHaveBeenCalled());
     expect(container).toBeEmptyDOMElement();
   });
 
   it("renders an initial-letter badge button when signed in, no round in play", async () => {
     global.fetch = mockFetch({ me: { id: "u1", email: "a@example.com", name: "Alex" } }) as unknown as typeof fetch;
-    render(<Harness apiBaseUrl="http://api.test" />);
+    render(<UserBadge apiBaseUrl="http://api.test" />);
     await waitFor(() => expect(screen.getByText("A")).toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Alex" })).toBeInTheDocument();
   });
@@ -110,47 +76,27 @@ describe("UserBadge", () => {
       round: { roundId: "round-1", phase: "bidding", currentLeaderCents: 100_000, depositCents: 10_000, biddingClosesAt: "2026-09-23T12:00:00.000Z" },
       participation: { joined: true, depositCents: 10_000, isLeading: false },
     }) as unknown as typeof fetch;
-    render(<Harness apiBaseUrl="http://api.test" />);
+    render(<UserBadge apiBaseUrl="http://api.test" />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Alex — action needed" })).toBeInTheDocument());
   });
 
-  it("opens the settings sidebar on click, showing identity, tabs, and the Auction tab's content", async () => {
-    global.fetch = mockFetch({
-      me: { id: "u1", email: "alex@example.com", name: "Alex" },
-      round: undefined,
-    }) as unknown as typeof fetch;
-    render(<Harness apiBaseUrl="http://api.test" />);
+  it("opens the settings sidebar on click, showing identity and the real leaderboard", async () => {
+    global.fetch = mockFetch({ me: { id: "u1", email: "alex@example.com", name: "Alex" } }) as unknown as typeof fetch;
+    render(<UserBadge apiBaseUrl="http://api.test" />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Alex" })).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole("button", { name: "Alex" }));
 
     expect(screen.getByRole("dialog", { name: /account settings/i })).toBeInTheDocument();
     expect(screen.getByText("alex@example.com")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Auction" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Leaderboard" })).toBeInTheDocument();
-    // LiveAuction's own "no active round" copy — confirms the real
-    // component is embedded, not a link out to a page.
-    await waitFor(() => expect(screen.getByText(/no active round/i)).toBeInTheDocument());
-  });
-
-  it("switches to the Leaderboard tab's content on click", async () => {
-    global.fetch = mockFetch({ me: { id: "u1", email: "alex@example.com", name: "Alex" } }) as unknown as typeof fetch;
-    render(<Harness apiBaseUrl="http://api.test" />);
-    await waitFor(() => expect(screen.getByRole("button", { name: "Alex" })).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: "Alex" }));
-    await waitFor(() => expect(screen.getByText(/no active round/i)).toBeInTheDocument());
-
-    fireEvent.click(screen.getByRole("button", { name: "Leaderboard" }));
-
     // LeaderboardTable's own empty-state copy — confirms the real component
-    // is embedded (with a genuinely empty `/leaderboard` response, per this
-    // test's mock), not a link out to a page.
+    // is embedded, not a link out to a page.
     await waitFor(() => expect(screen.getByText(/no completed reigns yet/i)).toBeInTheDocument());
   });
 
   it("closes the sidebar via the Close button", async () => {
     global.fetch = mockFetch({ me: { id: "u1", email: "alex@example.com", name: "Alex" } }) as unknown as typeof fetch;
-    render(<Harness apiBaseUrl="http://api.test" />);
+    render(<UserBadge apiBaseUrl="http://api.test" />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Alex" })).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Alex" }));
 
@@ -160,7 +106,7 @@ describe("UserBadge", () => {
 
   it("closes the sidebar on Escape", async () => {
     global.fetch = mockFetch({ me: { id: "u1", email: "alex@example.com", name: "Alex" } }) as unknown as typeof fetch;
-    render(<Harness apiBaseUrl="http://api.test" />);
+    render(<UserBadge apiBaseUrl="http://api.test" />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Alex" })).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Alex" }));
 
@@ -170,7 +116,7 @@ describe("UserBadge", () => {
 
   it("sign out (inside the sidebar) POSTs /auth/logout and redirects to /", async () => {
     global.fetch = mockFetch({ me: { id: "u1", email: "alex@example.com", name: "Alex" } }) as unknown as typeof fetch;
-    render(<Harness apiBaseUrl="http://api.test" />);
+    render(<UserBadge apiBaseUrl="http://api.test" />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Alex" })).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Alex" }));
 
@@ -188,7 +134,7 @@ describe("UserBadge — post-signup email confirmation", () => {
     // @ts-expect-error test override
     window.location = { href: "/?welcome=1", search: "?welcome=1", pathname: "/" };
     global.fetch = mockFetch({ me: { id: "u1", email: "a@example.com", name: "Alex" } }) as unknown as typeof fetch;
-    render(<Harness apiBaseUrl="http://api.test" />);
+    render(<UserBadge apiBaseUrl="http://api.test" />);
 
     await waitFor(() => expect(screen.getByLabelText(/email/i)).toBeInTheDocument());
     expect(screen.getByLabelText(/email/i)).toHaveValue("a@example.com");
@@ -200,7 +146,7 @@ describe("UserBadge — post-signup email confirmation", () => {
     // @ts-expect-error test override
     window.location = { href: "/?welcome=1", search: "?welcome=1", pathname: "/" };
     global.fetch = mockFetch({ me: { id: "u1", email: "a@example.com", name: "Alex" } }) as unknown as typeof fetch;
-    render(<Harness apiBaseUrl="http://api.test" />);
+    render(<UserBadge apiBaseUrl="http://api.test" />);
 
     await waitFor(() => expect(screen.getByLabelText(/email/i)).toBeInTheDocument());
     fireEvent.change(screen.getByLabelText(/email/i), { target: { value: "new@example.com" } });
@@ -215,12 +161,12 @@ describe("UserBadge — post-signup email confirmation", () => {
       }),
     );
     await waitFor(() => expect(screen.getByText("Settings")).toBeInTheDocument());
-    expect(screen.getByRole("button", { name: "Auction" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/no completed reigns yet/i)).toBeInTheDocument());
   });
 
   it("does not show the email-confirm step on an ordinary sign-in (no ?welcome=1)", async () => {
     global.fetch = mockFetch({ me: { id: "u1", email: "alex@example.com", name: "Alex" } }) as unknown as typeof fetch;
-    render(<Harness apiBaseUrl="http://api.test" />);
+    render(<UserBadge apiBaseUrl="http://api.test" />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Alex" })).toBeInTheDocument());
     expect(screen.queryByLabelText(/email/i)).not.toBeInTheDocument();
   });
