@@ -4,7 +4,7 @@ import { reigns, rounds, bids } from "../../src/db/schema";
 import { createInitialReign } from "../../src/engine/bootstrap";
 import { prepareBid, isBiddingOpen } from "../../src/engine/prepareBid";
 import { getLatestRound } from "../../src/db/repository";
-import { BIDDING_PHASE_MS } from "../../src/domain/config";
+import { BIDDING_PHASE_MS, STARTING_PRICE_CENTS, MIN_INCREMENT_CENTS } from "../../src/domain/config";
 
 afterEach(async () => {
   await db.delete(bids);
@@ -48,7 +48,8 @@ describe("prepareBid", () => {
   it("rejects a bid that doesn't beat the champion by the minimum increment", async () => {
     const startsAt = new Date(2026, 0, 1);
     await createInitialReign("champ", startsAt);
-    const result = await prepareBid({ bidderId: "a", amountCents: 10_050, now: new Date(startsAt.getTime() + 1000) });
+    const belowMinimumIncrement = STARTING_PRICE_CENTS + MIN_INCREMENT_CENTS - 50;
+    const result = await prepareBid({ bidderId: "a", amountCents: belowMinimumIncrement, now: new Date(startsAt.getTime() + 1000) });
     expect(result.ok).toBe(false);
   });
 

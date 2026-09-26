@@ -14,4 +14,4 @@ export const ROUND_MS = BIDDING_PHASE_MS;
 
 // Fixed price to become champion when no reign exists yet. Configurable later;
 // there is nothing to out-bid before the first champion.
-export const STARTING_PRICE_CENTS = 10_000; // $100
+export const STARTING_PRICE_CENTS = 1_000; // $10
