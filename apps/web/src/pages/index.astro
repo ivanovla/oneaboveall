@@ -6,7 +6,22 @@ import { adaptScene, adaptLeaderboardRow } from "../lib/sceneAdapter";
 import { mockScene, mockLeaderboard, mockReferenceNow } from "../lib/mockData";
 import type { Scene as SceneData, LeaderboardRow } from "../lib/types";
 
-const apiBaseUrl = import.meta.env.API_BASE_URL ?? "http://127.0.0.1:3001";
+// Two different audiences, two different URLs — collapsing them into one
+// caused a real production bug (2026-09-26): the browser tried to fetch
+// the in-cluster Service hostname directly and failed, since that name
+// only resolves inside the k8s network.
+//
+// API_BASE_URL: read only during `astro build` (below, in fetchLiveData),
+// which runs inside the cluster (see infra/docker/rebuild-server.mjs) — an
+// internal Service address like http://oneaboveall-api is correct and
+// faster than round-tripping through the public domain and Traefik.
+const buildTimeApiBaseUrl = import.meta.env.API_BASE_URL ?? "http://127.0.0.1:3001";
+
+// PUBLIC_API_BASE_URL: baked into the static HTML and read by the browser
+// itself (every fetch inside AuctionFlow.tsx and its children) — this must
+// always be the API's public, TLS-fronted origin, never an internal
+// cluster hostname the browser cannot resolve.
+const publicApiBaseUrl = import.meta.env.PUBLIC_API_BASE_URL ?? "http://127.0.0.1:3001";
 
 // Strict mode for real deployments. This site's entire premise is "this is
 // who actually paid the most", so silently publishing the nine fabricated
@@ -64,18 +79,18 @@ async function fetchLiveData(): Promise<LiveData | null> {
   let leaderboardRes: Response;
   try {
     [sceneRes, leaderboardRes] = await Promise.all([
-      fetch(`${apiBaseUrl}/scene`),
-      fetch(`${apiBaseUrl}/leaderboard`),
+      fetch(`${buildTimeApiBaseUrl}/scene`),
+      fetch(`${buildTimeApiBaseUrl}/leaderboard`),
     ]);
   } catch (err) {
     return degradeToMock(
-      `could not reach the API at ${apiBaseUrl} (network error: ${err instanceof Error ? err.message : String(err)})`,
+      `could not reach the API at ${buildTimeApiBaseUrl} (network error: ${err instanceof Error ? err.message : String(err)})`,
     );
   }
 
   if (!sceneRes.ok || !leaderboardRes.ok) {
     return degradeToMock(
-      `the API at ${apiBaseUrl} responded with a non-OK status (scene: ${sceneRes.status}, leaderboard: ${leaderboardRes.status})`,
+      `the API at ${buildTimeApiBaseUrl} responded with a non-OK status (scene: ${sceneRes.status}, leaderboard: ${leaderboardRes.status})`,
     );
   }
 
@@ -94,13 +109,13 @@ async function fetchLiveData(): Promise<LiveData | null> {
     // of producing an `Invalid Date` that crashes Scene.astro's formatters
     // further downstream — past this catch and past the strict-mode gate.
     return degradeToMock(
-      `the API at ${apiBaseUrl} returned a malformed response body (${err instanceof Error ? err.message : String(err)})`,
+      `the API at ${buildTimeApiBaseUrl} returned a malformed response body (${err instanceof Error ? err.message : String(err)})`,
     );
   }
 
   if (!liveScene) {
     return degradeToMock(
-      `the API at ${apiBaseUrl} reports no champion yet on /scene (engine not bootstrapped)`,
+      `the API at ${buildTimeApiBaseUrl} reports no champion yet on /scene (engine not bootstrapped)`,
     );
   }
 
@@ -137,5 +152,5 @@ const referenceNow: Date = live?.referenceNow ?? mockReferenceNow;
     build-time figure that could already be wrong by the time this page is
     viewed (see AuctionFlow.tsx's own comment on `liveLeaderCents`).
   -->
-  <AuctionFlow client:idle leaderboard={leaderboard} apiBaseUrl={apiBaseUrl} />
+  <AuctionFlow client:idle leaderboard={leaderboard} apiBaseUrl={publicApiBaseUrl} />
 </BaseLayout>

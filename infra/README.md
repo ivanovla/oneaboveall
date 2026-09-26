@@ -143,10 +143,18 @@ publishing the nine mock people as the real champion and retinue (see
 without this file specifically to prevent that.
 
 ```bash
-# In-cluster address — the build runs inside the cluster (via the
-# web-rebuilder image), so it talks to the api Service directly rather than
-# going back out through the public domain and Traefik.
+# Read only during the build itself (see index.astro's fetchLiveData) — the
+# build runs inside the cluster (via the web-rebuilder image), so it talks
+# to the api Service directly rather than going back out through the public
+# domain and Traefik.
 API_BASE_URL=http://oneaboveall-api
+
+# Read by the visitor's BROWSER at runtime instead — must be the API's real
+# public origin. Do NOT set this to the internal Service address above: an
+# earlier deploy did exactly that and the browser tried (and failed) to
+# fetch http://oneaboveall-api/auth/me directly, since that hostname only
+# resolves inside the cluster.
+PUBLIC_API_BASE_URL=https://api.oneaboveall.org
 
 REQUIRE_LIVE_DATA=true
 
