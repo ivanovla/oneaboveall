@@ -5,6 +5,8 @@ import type { LeaderboardRow } from "../lib/types";
 import UserBadge from "./UserBadge";
 import BidFlow from "./BidFlow";
 import PhotoUploader from "./PhotoUploader";
+import ViewCounter from "./ViewCounter";
+import { chromeButtonStyle } from "./chromeStyles";
 
 type Screen = "closed" | "auth" | "bid" | "top" | "photoReminder";
 
@@ -96,17 +98,8 @@ const headingStyle: React.CSSProperties = {
 };
 
 // The two fixed top-right chrome chips (theme toggle + Leaderboard), styled
-// identically in the prototype.
-const chromeButtonStyle: React.CSSProperties = {
-  padding: "8px 13px",
-  fontSize: 10,
-  letterSpacing: ".18em",
-  textTransform: "uppercase",
-  color: "var(--on-scene-dim)",
-  border: "1px solid var(--line)",
-  background: "var(--scene-chip)",
-  backdropFilter: "blur(8px)",
-};
+// identically in the prototype. Shared with ViewCounter.tsx — see
+// chromeStyles.ts.
 
 // Keep in sync with the pre-paint theme script in layouts/BaseLayout.astro,
 // which reads the same key before this island ever hydrates.
@@ -377,6 +370,7 @@ export default function AuctionFlow({
 
   return (
     <div>
+      <ViewCounter apiBaseUrl={apiBaseUrl} />
       <div
         style={{
           position: "fixed",

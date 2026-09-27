@@ -1,6 +1,6 @@
-import { and, desc, asc, eq, lte, isNull } from "drizzle-orm";
+import { and, desc, asc, eq, lte, isNull, sql } from "drizzle-orm";
 import { db } from "./client";
-import { reigns, rounds, bids } from "./schema";
+import { reigns, rounds, bids, pageViews } from "./schema";
 import { validateBidAmount } from "../domain/bidValidation";
 
 export type Reign = typeof reigns.$inferSelect;
@@ -185,4 +185,16 @@ export async function recordBidAtomic(params: {
     }
   }
   throw new Error("recordBidAtomic: exceeded retry attempts under serialization conflict");
+}
+
+// Atomically creates the single counter row (id 1) on its very first call
+// and increments it on every one after — one round-trip, no race between
+// two concurrent first requests both trying to insert it.
+export async function incrementPageViews(): Promise<number> {
+  const [row] = await db
+    .insert(pageViews)
+    .values({ id: 1, count: 1 })
+    .onConflictDoUpdate({ target: pageViews.id, set: { count: sql`${pageViews.count} + 1` } })
+    .returning();
+  return row.count;
 }

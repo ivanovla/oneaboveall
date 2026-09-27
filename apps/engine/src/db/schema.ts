@@ -88,6 +88,17 @@ export const users = pgTable("users", {
   providerIdentityIdx: uniqueIndex("users_provider_provider_id_idx").on(table.provider, table.providerId),
 }));
 
+// A single-row counter (id is always 1) tracking how many times the
+// homepage has been loaded — incremented once per real page view via
+// POST /page-views (see apps/api/src/routes/pageViews.ts), called from the
+// browser itself, never at build time. Deliberately not per-visitor/unique:
+// the product asks "how many times has this page been viewed", not "how
+// many distinct people have viewed it".
+export const pageViews = pgTable("page_views", {
+  id: integer("id").primaryKey(),
+  count: integer("count").notNull().default(0),
+});
+
 // An opaque, server-validated session token — never a client-decodable JWT.
 // The browser only ever sees `token`, delivered as an httpOnly cookie.
 export const sessions = pgTable("sessions", {

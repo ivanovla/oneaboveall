@@ -16,6 +16,7 @@ import { registerAppleAuthRoutes } from "./routes/authApple";
 import { registerAuthMeRoutes } from "./routes/authMe";
 import { registerPhotoRoutes } from "./routes/photo";
 import { registerHistoryRoute } from "./routes/history";
+import { registerPageViewsRoute } from "./routes/pageViews";
 import { stripe, STRIPE_CURRENCY, STRIPE_WEBHOOK_SECRET } from "./stripeClient";
 import { StripePaymentProvider } from "./payments/StripePaymentProvider";
 
@@ -155,6 +156,7 @@ export function buildServer(): FastifyInstance {
   registerAuthMeRoutes(app);
   registerPhotoRoutes(app);
   registerHistoryRoute(app);
+  registerPageViewsRoute(app);
 
   // Liveness/readiness target for the k8s Deployment (see
   // infra/k8s/api.yaml). Deliberately does not touch the database — this
