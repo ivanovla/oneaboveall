@@ -188,13 +188,15 @@ export async function recordBidAtomic(params: {
 }
 
 // Atomically creates the single counter row (id 1) on its very first call
-// and increments it on every one after — one round-trip, no race between
-// two concurrent first requests both trying to insert it.
-export async function incrementPageViews(): Promise<number> {
+// and increments it by `by` on every one after — one round-trip, no race
+// between two concurrent first requests both trying to insert it. `by`
+// exists so the API route can batch many page loads into one write (see
+// apps/api/src/routes/pageViews.ts) instead of one write per load.
+export async function incrementPageViews(by: number = 1): Promise<number> {
   const [row] = await db
     .insert(pageViews)
-    .values({ id: 1, count: 1 })
-    .onConflictDoUpdate({ target: pageViews.id, set: { count: sql`${pageViews.count} + 1` } })
+    .values({ id: 1, count: by })
+    .onConflictDoUpdate({ target: pageViews.id, set: { count: sql`${pageViews.count} + ${by}` } })
     .returning();
   return row.count;
 }
