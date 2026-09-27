@@ -187,7 +187,8 @@ describe("BidFlow — photo step", () => {
     await getToPhotoStep(fetchMock);
 
     const file = new File(["fake-bytes"], "selfie.jpg", { type: "image/jpeg" });
-    fireEvent.change(screen.getByLabelText(/photo/i), { target: { files: [file] } });
+    fireEvent.change(screen.getByLabelText("Photo"), { target: { files: [file] } });
+    fireEvent.click(screen.getByRole("checkbox"));
     fireEvent.click(screen.getByText("Upload photo"));
 
     await waitFor(() =>
@@ -208,7 +209,8 @@ describe("BidFlow — photo step", () => {
     await getToPhotoStep(mockFetch({ photoOk: false, photoError: "only JPEG, PNG, or WebP images are accepted" }));
 
     const file = new File(["not an image"], "notes.txt", { type: "text/plain" });
-    fireEvent.change(screen.getByLabelText(/photo/i), { target: { files: [file] } });
+    fireEvent.change(screen.getByLabelText("Photo"), { target: { files: [file] } });
+    fireEvent.click(screen.getByRole("checkbox"));
     fireEvent.click(screen.getByText("Upload photo"));
 
     await waitFor(() => expect(screen.getByText("only JPEG, PNG, or WebP images are accepted")).toBeInTheDocument());
@@ -224,9 +226,10 @@ describe("BidFlow — social step (optional)", () => {
     fireEvent.click(screen.getByText("Displace"));
     await waitFor(() => expect(screen.getByTestId("payment-element")).toBeInTheDocument());
     fireEvent.click(screen.getByText("Confirm payment"));
-    await waitFor(() => expect(screen.getByLabelText(/photo/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByLabelText("Photo")).toBeInTheDocument());
     const file = new File(["fake-bytes"], "selfie.jpg", { type: "image/jpeg" });
-    fireEvent.change(screen.getByLabelText(/photo/i), { target: { files: [file] } });
+    fireEvent.change(screen.getByLabelText("Photo"), { target: { files: [file] } });
+    fireEvent.click(screen.getByRole("checkbox"));
     fireEvent.click(screen.getByText("Upload photo"));
     await waitFor(() => expect(screen.getByLabelText(/social media link/i)).toBeInTheDocument());
   }

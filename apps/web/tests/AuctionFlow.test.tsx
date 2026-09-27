@@ -199,7 +199,8 @@ describe("AuctionFlow — photo reminder", () => {
     await waitFor(() => expect(screen.getByText(/add your photo/i)).toBeInTheDocument());
 
     const file = new File(["fake-bytes"], "selfie.jpg", { type: "image/jpeg" });
-    fireEvent.change(screen.getByLabelText(/photo/i), { target: { files: [file] } });
+    fireEvent.change(screen.getByLabelText("Photo"), { target: { files: [file] } });
+    fireEvent.click(screen.getByRole("checkbox"));
     fireEvent.click(screen.getByText("Upload photo"));
 
     await waitFor(() => expect(screen.queryByText(/add your photo/i)).not.toBeInTheDocument());

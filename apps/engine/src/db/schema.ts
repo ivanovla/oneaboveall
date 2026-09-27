@@ -76,6 +76,13 @@ export const users = pgTable("users", {
   // upload for whoever composes the scene art, never parsed or acted on by
   // this codebase itself.
   characterRequest: text("character_request"),
+  // Set the instant a photo upload actually succeeds (POST /auth/photo),
+  // never client-supplied — this is the record that the person confirmed,
+  // at that moment, that they own the photo's rights or have permission to
+  // use it and grant this site a license to display it (and any artwork
+  // rendered from it) publicly. Null means no upload has ever succeeded, not
+  // that consent was withheld — there's nothing to consent to yet.
+  photoConsentAt: timestamp("photo_consent_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   providerIdentityIdx: uniqueIndex("users_provider_provider_id_idx").on(table.provider, table.providerId),

@@ -135,7 +135,7 @@ describe("UserBadge", () => {
 
     expect(screen.getByText("Photo")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText(/available once you've placed a bid/i)).toBeInTheDocument());
-    expect(screen.queryByLabelText(/photo/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Photo")).not.toBeInTheDocument();
   });
 
   it("shows the upload control once the bidder has a paid bid on record, whether or not a photo is already on file", async () => {
@@ -147,7 +147,7 @@ describe("UserBadge", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Alex" })).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Alex" }));
 
-    await waitFor(() => expect(screen.getByLabelText(/photo/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByLabelText("Photo")).toBeInTheDocument());
     // No native file-input chrome visible — it's an invisible input layered
     // over a styled dropzone.
     expect(screen.getByText(/click to choose a photo/i)).toBeInTheDocument();
@@ -162,10 +162,11 @@ describe("UserBadge", () => {
     render(<UserBadge apiBaseUrl="http://api.test" />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Alex" })).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Alex" }));
-    await waitFor(() => expect(screen.getByLabelText(/photo/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByLabelText("Photo")).toBeInTheDocument());
 
     const file = new File(["fake-bytes"], "selfie.jpg", { type: "image/jpeg" });
-    fireEvent.change(screen.getByLabelText(/photo/i), { target: { files: [file] } });
+    fireEvent.change(screen.getByLabelText("Photo"), { target: { files: [file] } });
+    fireEvent.click(screen.getByRole("checkbox"));
     fireEvent.click(screen.getByText("Save photo"));
 
     await waitFor(() =>

@@ -71,6 +71,23 @@ const submitButtonStyle: React.CSSProperties = {
   textTransform: "uppercase",
 };
 
+const consentLabelStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "flex-start",
+  gap: 8,
+  marginTop: 14,
+  maxWidth: 320,
+  fontSize: 11,
+  lineHeight: 1.5,
+  color: "var(--fg-faint)",
+  cursor: "pointer",
+};
+
+const consentCheckboxStyle: React.CSSProperties = {
+  marginTop: 2,
+  flexShrink: 0,
+};
+
 const instructionsStyle: React.CSSProperties = {
   marginTop: 10,
   fontSize: 11,
@@ -151,6 +168,7 @@ export default function PhotoUploader({
   const [error, setError] = useState<string | null>(null);
   const [justSaved, setJustSaved] = useState(false);
   const [characterRequest, setCharacterRequest] = useState(initialCharacterRequest);
+  const [consentGiven, setConsentGiven] = useState(false);
 
   // Revokes the previous selection's object URL when a new file replaces it
   // or the component unmounts — otherwise each selection leaks the blob.
@@ -167,15 +185,20 @@ export default function PhotoUploader({
     setObjectUrl(chosen ? URL.createObjectURL(chosen) : null);
     setError(null);
     setJustSaved(false);
+    // Consent is for this specific photo, not a standing permission — a
+    // newly chosen file needs it confirmed again, not inherited from
+    // whatever was checked for the previous selection.
+    setConsentGiven(false);
   }
 
   async function submit() {
-    if (!file) return;
+    if (!file || !consentGiven) return;
     setUploading(true);
     setError(null);
     try {
       const form = new FormData();
       form.append("photo", file);
+      form.append("consent", "true");
       // No content-type header set deliberately — the browser fills in
       // multipart/form-data with the correct boundary itself; setting it by
       // hand would drop that boundary and break the upload.
@@ -209,6 +232,7 @@ export default function PhotoUploader({
       setExistingPhotoOk(true);
       setCacheBust((n) => n + 1);
       setJustSaved(true);
+      setConsentGiven(false);
       onUploaded?.(data.photoPath);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't upload that photo — please try again.");
@@ -264,9 +288,24 @@ export default function PhotoUploader({
       {justSaved && !file && <div style={{ marginTop: 10, fontSize: 12, color: "var(--gold)" }}>Photo saved.</div>}
 
       {file && (
-        <button onClick={submit} disabled={uploading} style={submitButtonStyle}>
-          {uploading ? "Uploading…" : submitLabel}
-        </button>
+        <>
+          <label style={consentLabelStyle}>
+            <input
+              type="checkbox"
+              checked={consentGiven}
+              onChange={(e) => setConsentGiven(e.target.checked)}
+              style={consentCheckboxStyle}
+            />
+            <span>
+              I own the rights to this photo (or have permission to use it), and I grant oneaboveall.org a licence
+              to use it — and any character artwork created from it — publicly on this site.
+            </span>
+          </label>
+
+          <button onClick={submit} disabled={uploading || !consentGiven} style={submitButtonStyle}>
+            {uploading ? "Uploading…" : submitLabel}
+          </button>
+        </>
       )}
     </div>
   );

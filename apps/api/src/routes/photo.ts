@@ -35,6 +35,20 @@ export function registerPhotoRoutes(app: FastifyInstance): void {
       return { error: "no file uploaded" };
     }
 
+    // Required, not merely recommended: this is the one point in the
+    // upload where the person confirms they own the photo's rights (or have
+    // permission to use it) and grant this site a license to display it —
+    // and any artwork rendered from it — publicly. Checked server-side
+    // rather than trusted from a disabled-until-checked button alone, since
+    // a client can always be bypassed. @fastify/multipart puts every
+    // non-file part of the same request onto `data.fields`, keyed by name.
+    const consentField = data.fields.consent;
+    const consentGiven = !Array.isArray(consentField) && consentField?.type === "field" && consentField.value === "true";
+    if (!consentGiven) {
+      reply.code(400);
+      return { error: "you must confirm you have the rights to this photo before uploading" };
+    }
+
     const ext = MIME_TO_EXT[data.mimetype];
     if (!ext) {
       reply.code(400);
@@ -74,7 +88,7 @@ export function registerPhotoRoutes(app: FastifyInstance): void {
       return { error: "photo must be under 12 MB" };
     }
 
-    await db.update(users).set({ photoPath: filename }).where(eq(users.id, user.id));
+    await db.update(users).set({ photoPath: filename, photoConsentAt: new Date() }).where(eq(users.id, user.id));
     return { photoPath: filename };
   });
 

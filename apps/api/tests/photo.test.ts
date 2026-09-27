@@ -10,13 +10,23 @@ import { createSession } from "../src/auth/session";
 
 const UPLOAD_DIR = path.join(process.cwd(), "uploads");
 
-function buildMultipartBody(field: { filename: string; contentType: string; content: Buffer }): {
+// `consent` defaults to "true" so every existing call site — which is
+// testing something other than the consent gate — keeps exercising a
+// request that should succeed. Pass `consent: null` to omit the field
+// entirely (simulating the checkbox never having been checked).
+function buildMultipartBody(field: { filename: string; contentType: string; content: Buffer; consent?: string | null }): {
   body: Buffer;
   contentType: string;
 } {
   const boundary = "----test-boundary-oneaboveall";
+  const consent = field.consent === undefined ? "true" : field.consent;
+  const consentPart =
+    consent === null
+      ? ""
+      : `--${boundary}\r\n` + `Content-Disposition: form-data; name="consent"\r\n\r\n${consent}\r\n`;
   const head = Buffer.from(
-    `--${boundary}\r\n` +
+    consentPart +
+      `--${boundary}\r\n` +
       `Content-Disposition: form-data; name="photo"; filename="${field.filename}"\r\n` +
       `Content-Type: ${field.contentType}\r\n\r\n`,
   );
@@ -63,14 +73,52 @@ describe("POST /auth/photo", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ photoPath: `${user.id}.jpg` });
 
-    const [row] = await db.select({ photoPath: users.photoPath }).from(users).where(eq(users.id, user.id));
+    const [row] = await db.select({ photoPath: users.photoPath, photoConsentAt: users.photoConsentAt }).from(users).where(eq(users.id, user.id));
     expect(row.photoPath).toBe(`${user.id}.jpg`);
+    expect(row.photoConsentAt).not.toBeNull();
 
     const savedPath = path.join(UPLOAD_DIR, `${user.id}.jpg`);
     expect(existsSync(savedPath)).toBe(true);
     expect(readFileSync(savedPath).toString()).toBe("fake-jpeg-bytes");
 
     await unlink(savedPath).catch(() => {});
+  });
+
+  it("rejects an upload with no consent field, without touching the user row", async () => {
+    const [user] = await db.insert(users).values({ provider: "google", providerId: "g-photo-consent-1", email: "consent1@example.com", name: "Consent1" }).returning();
+    const { token } = await createSession(user.id);
+
+    const app = buildServer();
+    const { body, contentType } = buildMultipartBody({ filename: "selfie.jpg", contentType: "image/jpeg", content: Buffer.from("fake-jpeg-bytes"), consent: null });
+    const response = await app.inject({
+      method: "POST",
+      url: "/auth/photo",
+      headers: { cookie: `oneaboveall_session=${token}`, "content-type": contentType },
+      payload: body,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "you must confirm you have the rights to this photo before uploading" });
+
+    const [row] = await db.select({ photoPath: users.photoPath }).from(users).where(eq(users.id, user.id));
+    expect(row.photoPath).toBeNull();
+    expect(existsSync(path.join(UPLOAD_DIR, `${user.id}.jpg`))).toBe(false);
+  });
+
+  it('rejects an upload whose consent field isn\'t exactly "true"', async () => {
+    const [user] = await db.insert(users).values({ provider: "google", providerId: "g-photo-consent-2", email: "consent2@example.com", name: "Consent2" }).returning();
+    const { token } = await createSession(user.id);
+
+    const app = buildServer();
+    const { body, contentType } = buildMultipartBody({ filename: "selfie.jpg", contentType: "image/jpeg", content: Buffer.from("fake-jpeg-bytes"), consent: "false" });
+    const response = await app.inject({
+      method: "POST",
+      url: "/auth/photo",
+      headers: { cookie: `oneaboveall_session=${token}`, "content-type": contentType },
+      payload: body,
+    });
+
+    expect(response.statusCode).toBe(400);
   });
 
   it("rejects a non-image content type with 400, without touching the user row", async () => {

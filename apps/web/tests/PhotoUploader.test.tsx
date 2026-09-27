@@ -32,19 +32,45 @@ describe("PhotoUploader", () => {
   it("choosing a file shows a preview and reveals the submit button", () => {
     render(<PhotoUploader apiBaseUrl="http://api.test" userId="u1" hasPhoto={false} />);
     const file = new File(["fake-bytes"], "selfie.jpg", { type: "image/jpeg" });
-    fireEvent.change(screen.getByLabelText(/photo/i), { target: { files: [file] } });
+    fireEvent.change(screen.getByLabelText("Photo"), { target: { files: [file] } });
 
     expect(screen.getByText(/new photo selected/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save photo" })).toBeInTheDocument();
   });
 
-  it("uploads the chosen file as multipart form data, with no manually-set content-type header", async () => {
+  it("disables the submit button until the consent checkbox is checked", () => {
+    render(<PhotoUploader apiBaseUrl="http://api.test" userId="u1" hasPhoto={false} />);
+    const file = new File(["fake-bytes"], "selfie.jpg", { type: "image/jpeg" });
+    fireEvent.change(screen.getByLabelText("Photo"), { target: { files: [file] } });
+
+    const button = screen.getByRole("button", { name: "Save photo" });
+    expect(button).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("checkbox"));
+    expect(button).not.toBeDisabled();
+  });
+
+  it("re-requires consent for a newly chosen file, even after checking it for a previous one", () => {
+    render(<PhotoUploader apiBaseUrl="http://api.test" userId="u1" hasPhoto={false} />);
+    const first = new File(["fake-bytes"], "selfie.jpg", { type: "image/jpeg" });
+    fireEvent.change(screen.getByLabelText("Photo"), { target: { files: [first] } });
+    fireEvent.click(screen.getByRole("checkbox"));
+    expect(screen.getByRole("button", { name: "Save photo" })).not.toBeDisabled();
+
+    const second = new File(["other-bytes"], "other.jpg", { type: "image/jpeg" });
+    fireEvent.change(screen.getByLabelText("Photo"), { target: { files: [second] } });
+    expect(screen.getByRole("checkbox")).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "Save photo" })).toBeDisabled();
+  });
+
+  it("uploads the chosen file as multipart form data, with consent included and no manually-set content-type header", async () => {
     const fetchMock = mockFetch({ photoPath: "u1.jpg" });
     global.fetch = fetchMock as unknown as typeof fetch;
     render(<PhotoUploader apiBaseUrl="http://api.test" userId="u1" hasPhoto={false} />);
 
     const file = new File(["fake-bytes"], "selfie.jpg", { type: "image/jpeg" });
-    fireEvent.change(screen.getByLabelText(/photo/i), { target: { files: [file] } });
+    fireEvent.change(screen.getByLabelText("Photo"), { target: { files: [file] } });
+    fireEvent.click(screen.getByRole("checkbox"));
     fireEvent.click(screen.getByRole("button", { name: "Save photo" }));
 
     await waitFor(() =>
@@ -55,6 +81,8 @@ describe("PhotoUploader", () => {
     );
     const call = fetchMock.mock.calls[0];
     expect(call[1]?.headers).toBeUndefined();
+    const body = call[1]?.body as FormData;
+    expect(body.get("consent")).toBe("true");
   });
 
   it("calls onUploaded with the new photoPath and clears the pending selection on success", async () => {
@@ -63,7 +91,8 @@ describe("PhotoUploader", () => {
     render(<PhotoUploader apiBaseUrl="http://api.test" userId="u1" hasPhoto={false} onUploaded={onUploaded} />);
 
     const file = new File(["fake-bytes"], "selfie.png", { type: "image/png" });
-    fireEvent.change(screen.getByLabelText(/photo/i), { target: { files: [file] } });
+    fireEvent.change(screen.getByLabelText("Photo"), { target: { files: [file] } });
+    fireEvent.click(screen.getByRole("checkbox"));
     fireEvent.click(screen.getByRole("button", { name: "Save photo" }));
 
     await waitFor(() => expect(onUploaded).toHaveBeenCalledWith("u1.png"));
@@ -76,7 +105,8 @@ describe("PhotoUploader", () => {
     render(<PhotoUploader apiBaseUrl="http://api.test" userId="u1" hasPhoto={false} />);
 
     const file = new File(["not an image"], "notes.txt", { type: "text/plain" });
-    fireEvent.change(screen.getByLabelText(/photo/i), { target: { files: [file] } });
+    fireEvent.change(screen.getByLabelText("Photo"), { target: { files: [file] } });
+    fireEvent.click(screen.getByRole("checkbox"));
     fireEvent.click(screen.getByRole("button", { name: "Save photo" }));
 
     await waitFor(() => expect(screen.getByText("only JPEG, PNG, or WebP images are accepted")).toBeInTheDocument());
@@ -89,7 +119,8 @@ describe("PhotoUploader", () => {
     render(<PhotoUploader apiBaseUrl="http://api.test" userId="u1" hasPhoto={false} onUnauthorized={onUnauthorized} />);
 
     const file = new File(["fake-bytes"], "selfie.jpg", { type: "image/jpeg" });
-    fireEvent.change(screen.getByLabelText(/photo/i), { target: { files: [file] } });
+    fireEvent.change(screen.getByLabelText("Photo"), { target: { files: [file] } });
+    fireEvent.click(screen.getByRole("checkbox"));
     fireEvent.click(screen.getByRole("button", { name: "Save photo" }));
 
     await waitFor(() => expect(onUnauthorized).toHaveBeenCalled());
@@ -98,7 +129,7 @@ describe("PhotoUploader", () => {
   it("uses a custom submit label when given one", () => {
     render(<PhotoUploader apiBaseUrl="http://api.test" userId="u1" hasPhoto={false} submitLabel="Upload photo" />);
     const file = new File(["fake-bytes"], "selfie.jpg", { type: "image/jpeg" });
-    fireEvent.change(screen.getByLabelText(/photo/i), { target: { files: [file] } });
+    fireEvent.change(screen.getByLabelText("Photo"), { target: { files: [file] } });
     expect(screen.getByRole("button", { name: "Upload photo" })).toBeInTheDocument();
   });
 });
