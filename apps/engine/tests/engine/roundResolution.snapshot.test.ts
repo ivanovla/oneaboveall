@@ -3,7 +3,7 @@ import { eq, isNull } from "drizzle-orm";
 import { db, pool } from "../../src/db/client";
 import { reigns, rounds, bids } from "../../src/db/schema";
 import { resolveBiddingPhaseSnapshot } from "../../src/engine/roundResolution";
-import { BIDDING_PHASE_MS } from "../../src/domain/config";
+import { nextDailyCloseAt } from "../../src/domain/dailyClose";
 
 afterEach(async () => {
   await db.delete(bids);
@@ -25,7 +25,7 @@ describe("resolveBiddingPhaseSnapshot", () => {
   it("closes the round with no change when the queue is empty", async () => {
     const startsAt = new Date(2026, 0, 1, 0, 0, 0);
     const { roundId } = await seedRound(startsAt);
-    const snapshotAt = new Date(startsAt.getTime() + BIDDING_PHASE_MS);
+    const snapshotAt = nextDailyCloseAt(startsAt);
 
     const result = await resolveBiddingPhaseSnapshot(roundId, snapshotAt);
     expect(result.outcome).toBe("empty-closed");
@@ -38,7 +38,7 @@ describe("resolveBiddingPhaseSnapshot", () => {
     const startsAt = new Date(2026, 0, 1, 0, 0, 0);
     const { roundId, reignId } = await seedRound(startsAt);
     await db.insert(bids).values({ roundId, bidderId: "a", amountCents: 11_000, paymentRef: "pi_a", placedAt: new Date(startsAt.getTime() + 1000) });
-    const snapshotAt = new Date(startsAt.getTime() + BIDDING_PHASE_MS);
+    const snapshotAt = nextDailyCloseAt(startsAt);
 
     let installedOccupantId: string | undefined;
     const result = await resolveBiddingPhaseSnapshot(roundId, snapshotAt, (occupantId) => {
@@ -62,7 +62,7 @@ describe("resolveBiddingPhaseSnapshot", () => {
     const startsAt = new Date(2026, 0, 1, 0, 0, 0);
     const { roundId } = await seedRound(startsAt);
     await db.insert(bids).values({ roundId, bidderId: "a", amountCents: 11_000, paymentRef: "pi_a", placedAt: new Date(startsAt.getTime() + 1000) });
-    const snapshotAt = new Date(startsAt.getTime() + BIDDING_PHASE_MS);
+    const snapshotAt = nextDailyCloseAt(startsAt);
 
     const [first, second] = await Promise.all([
       resolveBiddingPhaseSnapshot(roundId, snapshotAt),
@@ -79,7 +79,7 @@ describe("resolveBiddingPhaseSnapshot", () => {
   it("ignores a bid placed after the bidding window closed when picking the snapshot leader", async () => {
     const startsAt = new Date(2026, 0, 1, 0, 0, 0);
     const { roundId } = await seedRound(startsAt);
-    const snapshotAt = new Date(startsAt.getTime() + BIDDING_PHASE_MS);
+    const snapshotAt = nextDailyCloseAt(startsAt);
     await db.insert(bids).values({ roundId, bidderId: "honest", amountCents: 11_000, paymentRef: "pi_honest", placedAt: new Date(startsAt.getTime() + 1000) });
     await db.insert(bids).values({ roundId, bidderId: "sniper", amountCents: 99_000, paymentRef: "pi_sniper", placedAt: new Date(snapshotAt.getTime() + 1000) });
 

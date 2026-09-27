@@ -3,7 +3,8 @@ import { db } from "../db/client";
 import { reigns, rounds } from "../db/schema";
 import { resolveBiddingPhaseSnapshot } from "./roundResolution";
 import { getQueueLeader } from "../db/repository";
-import { BIDDING_PHASE_MS, CHAMPION_PROCESSING_GAP_MS } from "../domain/config";
+import { CHAMPION_PROCESSING_GAP_MS } from "../domain/config";
+import { nextDailyCloseAt } from "../domain/dailyClose";
 
 export async function tick(now: Date, onInstalled?: (occupantId: string) => void): Promise<void> {
   const dueBiddingRounds = await db
@@ -12,7 +13,7 @@ export async function tick(now: Date, onInstalled?: (occupantId: string) => void
     .where(eq(rounds.phase, "bidding"));
 
   for (const round of dueBiddingRounds) {
-    const snapshotAt = new Date(round.startsAt.getTime() + BIDDING_PHASE_MS);
+    const snapshotAt = nextDailyCloseAt(round.startsAt);
     if (now.getTime() < snapshotAt.getTime()) continue;
 
     // A round with no leader can roll into its reign's next round the

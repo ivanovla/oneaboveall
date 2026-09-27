@@ -4,7 +4,8 @@ import { reigns, rounds, bids } from "../../src/db/schema";
 import { createInitialReign } from "../../src/engine/bootstrap";
 import { prepareBid, isBiddingOpen } from "../../src/engine/prepareBid";
 import { getLatestRound } from "../../src/db/repository";
-import { BIDDING_PHASE_MS, STARTING_PRICE_CENTS, MIN_INCREMENT_CENTS } from "../../src/domain/config";
+import { STARTING_PRICE_CENTS, MIN_INCREMENT_CENTS } from "../../src/domain/config";
+import { nextDailyCloseAt } from "../../src/domain/dailyClose";
 
 afterEach(async () => {
   await db.delete(bids);
@@ -17,12 +18,13 @@ afterAll(async () => {
 });
 
 describe("isBiddingOpen", () => {
-  it("is open from startsAt up to (not including) startsAt + BIDDING_PHASE_MS", () => {
-    const startsAt = new Date(2026, 0, 1, 0, 0, 0);
+  it("is open from startsAt up to (not including) the next daily close", () => {
+    const startsAt = new Date("2026-01-01T12:00:00.000Z");
     const round = { phase: "bidding", startsAt };
+    const closesAt = nextDailyCloseAt(startsAt).getTime();
     expect(isBiddingOpen(round, startsAt)).toBe(true);
-    expect(isBiddingOpen(round, new Date(startsAt.getTime() + BIDDING_PHASE_MS - 1))).toBe(true);
-    expect(isBiddingOpen(round, new Date(startsAt.getTime() + BIDDING_PHASE_MS))).toBe(false);
+    expect(isBiddingOpen(round, new Date(closesAt - 1))).toBe(true);
+    expect(isBiddingOpen(round, new Date(closesAt))).toBe(false);
     expect(isBiddingOpen(round, new Date(startsAt.getTime() - 1))).toBe(false);
   });
 
@@ -68,7 +70,7 @@ describe("prepareBid", () => {
   it("rejects a bid once the bidding window has closed", async () => {
     const startsAt = new Date(2026, 0, 1);
     await createInitialReign("champ", startsAt);
-    const result = await prepareBid({ bidderId: "a", amountCents: 10_100, now: new Date(startsAt.getTime() + BIDDING_PHASE_MS) });
+    const result = await prepareBid({ bidderId: "a", amountCents: 10_100, now: nextDailyCloseAt(startsAt) });
     expect(result.ok).toBe(false);
   });
 });

@@ -2,7 +2,7 @@ import { desc, isNotNull, isNull, sql } from "drizzle-orm";
 import { db } from "../db/client";
 import { reigns, users } from "../db/schema";
 import { getCurrentReign, getLatestRound, getQueueLeader } from "../db/repository";
-import { BIDDING_PHASE_MS } from "../domain/config";
+import { nextDailyCloseAt } from "../domain/dailyClose";
 
 // `reigns.occupantId` is a signed-in user's `users.id` — that was deliberate
 // (the engine's bidderId and a user's id are the same value, so no extra
@@ -139,6 +139,6 @@ export async function getCurrentRoundInfo(_now: Date): Promise<{
     roundId: round.id,
     phase: round.phase,
     currentLeaderCents: topBid ? topBid.amountCents : reign.priceCents,
-    biddingClosesAt: new Date(round.startsAt.getTime() + BIDDING_PHASE_MS),
+    biddingClosesAt: nextDailyCloseAt(round.startsAt),
   };
 }

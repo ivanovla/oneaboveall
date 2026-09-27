@@ -4,7 +4,7 @@ import { reigns, rounds, users } from "../../src/db/schema";
 import { getScene, getLeaderboard, getCurrentRoundInfo } from "../../src/queries/publicScene";
 import { createInitialReign } from "../../src/engine/bootstrap";
 import { getLatestRound } from "../../src/db/repository";
-import { BIDDING_PHASE_MS } from "../../src/domain/config";
+import { nextDailyCloseAt } from "../../src/domain/dailyClose";
 
 afterEach(async () => {
   await db.delete(rounds);
@@ -194,6 +194,6 @@ describe("getCurrentRoundInfo", () => {
     expect(info?.roundId).toBe(round!.id);
     expect(info?.phase).toBe("bidding");
     expect(info?.currentLeaderCents).toBe(reign.priceCents); // no bids yet — leader is the champion's price
-    expect(info?.biddingClosesAt).toEqual(new Date(startsAt.getTime() + BIDDING_PHASE_MS));
+    expect(info?.biddingClosesAt).toEqual(nextDailyCloseAt(startsAt));
   });
 });
