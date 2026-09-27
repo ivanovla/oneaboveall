@@ -5,7 +5,7 @@ import { reigns, rounds, bids } from "../../src/db/schema";
 import { createInitialReign } from "../../src/engine/bootstrap";
 import { tick } from "../../src/engine/scheduler";
 import { getCurrentReign, getLatestRound } from "../../src/db/repository";
-import { BIDDING_PHASE_MS, ROUND_MS } from "../../src/domain/config";
+import { BIDDING_PHASE_MS, ROUND_MS, CHAMPION_PROCESSING_GAP_MS } from "../../src/domain/config";
 
 afterEach(async () => {
   await db.delete(bids);
@@ -34,13 +34,32 @@ describe("tick", () => {
     expect(round?.phase).toBe("bidding");
   });
 
-  it("installs a winning bid immediately, in the same tick that snapshots the round", async () => {
+  it("does not install a winning bid until the processing gap has elapsed", async () => {
     const startsAt = new Date(2026, 0, 1, 0, 0, 0);
     const reign = await createInitialReign("champ", startsAt);
     const roundId = await currentRoundId(reign.id);
     await db.insert(bids).values({ roundId, bidderId: "winner", amountCents: 11_000, paymentRef: "pi_winner", placedAt: new Date(startsAt.getTime() + 1000) });
 
-    const settlementAt = new Date(startsAt.getTime() + BIDDING_PHASE_MS + 1000);
+    // Bidding has closed, but CHAMPION_PROCESSING_GAP_MS hasn't elapsed yet
+    // — the outgoing champion must keep showing on the public scene while
+    // the winner's artwork is prepared, so nothing should install here.
+    let installedOccupantId: string | undefined;
+    await tick(new Date(startsAt.getTime() + BIDDING_PHASE_MS + 1000), (occupantId) => {
+      installedOccupantId = occupantId;
+    });
+
+    expect(installedOccupantId).toBeUndefined();
+    const current = await getCurrentReign();
+    expect(current?.occupantId).toBe("champ");
+  });
+
+  it("installs a winning bid once the processing gap has elapsed", async () => {
+    const startsAt = new Date(2026, 0, 1, 0, 0, 0);
+    const reign = await createInitialReign("champ", startsAt);
+    const roundId = await currentRoundId(reign.id);
+    await db.insert(bids).values({ roundId, bidderId: "winner", amountCents: 11_000, paymentRef: "pi_winner", placedAt: new Date(startsAt.getTime() + 1000) });
+
+    const settlementAt = new Date(startsAt.getTime() + BIDDING_PHASE_MS + CHAMPION_PROCESSING_GAP_MS + 1000);
     let installedOccupantId: string | undefined;
     await tick(settlementAt, (occupantId) => {
       installedOccupantId = occupantId;
@@ -82,7 +101,7 @@ describe("tick", () => {
     await db.insert(bids).values({ roundId, bidderId: "honest", amountCents: 11_000, paymentRef: "pi_honest", placedAt: new Date(startsAt.getTime() + 1000) });
     await db.insert(bids).values({ roundId, bidderId: "sniper", amountCents: 99_000, paymentRef: "pi_sniper", placedAt: new Date(snapshotAt.getTime() + 1000) });
 
-    await tick(new Date(snapshotAt.getTime() + 5000));
+    await tick(new Date(snapshotAt.getTime() + CHAMPION_PROCESSING_GAP_MS + 5000));
 
     const current = await getCurrentReign();
     expect(current?.occupantId).toBe("honest");

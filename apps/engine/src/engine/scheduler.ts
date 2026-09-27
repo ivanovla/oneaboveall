@@ -2,7 +2,8 @@ import { eq, and, isNull } from "drizzle-orm";
 import { db } from "../db/client";
 import { reigns, rounds } from "../db/schema";
 import { resolveBiddingPhaseSnapshot } from "./roundResolution";
-import { BIDDING_PHASE_MS } from "../domain/config";
+import { getQueueLeader } from "../db/repository";
+import { BIDDING_PHASE_MS, CHAMPION_PROCESSING_GAP_MS } from "../domain/config";
 
 export async function tick(now: Date, onInstalled?: (occupantId: string) => void): Promise<void> {
   const dueBiddingRounds = await db
@@ -13,6 +14,19 @@ export async function tick(now: Date, onInstalled?: (occupantId: string) => void
   for (const round of dueBiddingRounds) {
     const snapshotAt = new Date(round.startsAt.getTime() + BIDDING_PHASE_MS);
     if (now.getTime() < snapshotAt.getTime()) continue;
+
+    // A round with no leader can roll into its reign's next round the
+    // instant bidding closes — nobody to install, no artwork to prepare, no
+    // reason to hold it open. A round WITH a leader waits out
+    // CHAMPION_PROCESSING_GAP_MS past snapshotAt before installation below —
+    // the leader is already frozen at this point (isBiddingOpen has already
+    // stopped accepting bids past snapshotAt), so this peek and the
+    // eventual real one inside resolveBiddingPhaseSnapshot always agree.
+    const leader = await getQueueLeader(round.id, snapshotAt);
+    if (leader) {
+      const installAt = new Date(snapshotAt.getTime() + CHAMPION_PROCESSING_GAP_MS);
+      if (now.getTime() < installAt.getTime()) continue;
+    }
 
     try {
       const result = await resolveBiddingPhaseSnapshot(round.id, snapshotAt, onInstalled, now);
