@@ -2,11 +2,13 @@ import { useEffect, useState } from "react";
 import { formatMoney, formatCountdown } from "../lib/format";
 import { mockLeaderboard } from "../lib/mockData";
 import type { LeaderboardRow } from "../lib/types";
+import type { ApiCurrentRound, ApiPublicPerson } from "../lib/apiTypes";
+import { sendAttributionIfNeeded } from "../lib/attribution";
 import UserBadge from "./UserBadge";
 import BidFlow from "./BidFlow";
 import PhotoUploader from "./PhotoUploader";
 import ViewCounter from "./ViewCounter";
-import { chromeButtonStyle } from "./chromeStyles";
+import { chromeButtonStyle, sponsoredTagStyle } from "./chromeStyles";
 
 type Screen = "closed" | "auth" | "bid" | "top" | "photoReminder";
 
@@ -231,6 +233,11 @@ export default function AuctionFlow({
   // Same reasoning as `liveLeaderCents` above, for the "Bidding window
   // closes in" line — see useCountdown's own doc comment.
   const [liveBiddingClosesAt, setLiveBiddingClosesAt] = useState<Date | null>(null);
+  // Who holds the top bid right now — the "Leading: NAME" line under the
+  // price, the whole point of which is to make visitors want to knock that
+  // person off. `undefined` = not known (no fetch yet, or an older API that
+  // doesn't send it: render nothing); `null` = nobody has bid this round.
+  const [liveLeader, setLiveLeader] = useState<ApiPublicPerson | null | undefined>(undefined);
   const theme = useThemeToggle();
   const clock = useCountdown(liveBiddingClosesAt);
   const priceLabel = liveLeaderCents === null ? null : formatMoney(liveLeaderCents);
@@ -261,6 +268,11 @@ export default function AuctionFlow({
         if (cancelled || !data) return;
         setSessionUserId(data.id);
         if (!data.photoPath) needsPhotoReminder = true;
+        // First moment we know who this visitor is: hand the streamer
+        // attribution captured at landing (lib/attribution.ts) to their
+        // account. Fire-and-forget and once per browser — it never throws
+        // and has nothing to show.
+        void sendAttributionIfNeeded(apiBaseUrl);
       })
       .catch(() => {
         if (!cancelled) setSignedIn(false);
@@ -300,9 +312,10 @@ export default function AuctionFlow({
       try {
         const res = await fetch(`${apiBaseUrl}/current-round`, { credentials: "include" });
         if (!cancelled && res.ok) {
-          const data: { roundId: string; currentLeaderCents: number; biddingClosesAt: string } | null = await res.json();
+          const data: ApiCurrentRound | null = await res.json();
           if (!cancelled) {
             setLiveLeaderCents(data ? data.currentLeaderCents : null);
+            setLiveLeader(data ? data.leader : undefined);
             // Same round → same close time on every poll — keep the same
             // Date *reference* rather than swapping in an equal-but-new one
             // each tick, so useCountdown's effect (keyed on this value)
@@ -430,6 +443,18 @@ export default function AuctionFlow({
               }}
             >
               {priceLabel}
+            </div>
+          )}
+          {priceLabel !== null && liveLeader !== undefined && (
+            <div style={{ fontSize: 12, letterSpacing: ".04em", color: "var(--on-scene-dim)" }}>
+              {liveLeader === null ? (
+                "No bids yet this round"
+              ) : (
+                <>
+                  Leading: <span style={{ color: "var(--on-scene)", fontWeight: 600 }}>{liveLeader.name}</span>
+                  {liveLeader.sponsored && <span style={sponsoredTagStyle}>Sponsored</span>}
+                </>
+              )}
             </div>
           )}
         </div>
@@ -577,7 +602,10 @@ export default function AuctionFlow({
                     {String(i + 1).padStart(2, "0")}
                   </div>
                   <div>
-                    <div style={{ fontSize: 15 }}>{row.name}</div>
+                    <div style={{ fontSize: 15 }}>
+                      {row.name}
+                      {row.sponsored && <span style={sponsoredTagStyle}>Sponsored</span>}
+                    </div>
                     <div style={{ marginTop: 3, fontSize: 11, color: "var(--fg-faint)" }}>
                       {row.rounds} round{row.rounds === 1 ? "" : "s"}
                     </div>

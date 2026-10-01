@@ -1,0 +1,16 @@
+---
+// Records first-touch streamer attribution (?ref=… / utm_*) for this page
+// load — see lib/attribution.ts. A component of its own, included by the
+// pages that should count (the homepage and the legal pages), rather than
+// baked into BaseLayout: Astro bundles a component's <script> into every
+// page that imports the component, regardless of conditional rendering, so
+// an opt-out prop on the layout couldn't keep it off /overlay — which
+// streamers load as an OBS source all day and must never count as visits.
+---
+<script>
+  import { captureAttribution } from "../lib/attribution";
+
+  // The browser-facing API origin, same value index.astro hands its React
+  // islands (never the in-cluster build-time API_BASE_URL).
+  captureAttribution(import.meta.env.PUBLIC_API_BASE_URL ?? "http://127.0.0.1:3001");
+</script>

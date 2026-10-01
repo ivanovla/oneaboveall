@@ -77,6 +77,7 @@ function adaptRetinueMember(api: ApiRetinueMember, index: number): Person {
     since: startedAt,
     heldLabel: formatDurationLabel(endedAt.getTime() - startedAt.getTime()),
     socialUrl: api.socialUrl ?? undefined,
+    sponsored: api.sponsored === true,
   };
 }
 
@@ -102,6 +103,7 @@ export function adaptScene(api: ApiSceneResponse): Scene | null {
       // ignores this field for them.
       heldLabel: "",
       socialUrl: api.champion.socialUrl ?? undefined,
+      sponsored: api.champion.sponsored === true,
     },
     retinue: api.retinue.map(adaptRetinueMember),
   };
@@ -121,5 +123,6 @@ export function adaptLeaderboardRow(api: ApiLeaderboardRow): LeaderboardRow {
     rounds: api.rounds,
     totalSpentCents: api.totalSpentCents,
     totalDurationLabel: formatDurationLabel(api.totalDurationMs),
+    sponsored: api.sponsored === true,
   };
 }

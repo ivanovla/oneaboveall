@@ -3,6 +3,7 @@ import BaseLayout from "../layouts/BaseLayout.astro";
 import Scene from "../components/Scene.astro";
 import AuctionFlow from "../components/AuctionFlow";
 import SiteFooter from "../components/SiteFooter.astro";
+import AttributionTracker from "../components/AttributionTracker.astro";
 import { adaptScene, adaptLeaderboardRow } from "../lib/sceneAdapter";
 import { mockScene, mockLeaderboard, mockReferenceNow } from "../lib/mockData";
 import type { Scene as SceneData, LeaderboardRow } from "../lib/types";
@@ -155,4 +156,5 @@ const referenceNow: Date = live?.referenceNow ?? mockReferenceNow;
   -->
   <AuctionFlow client:idle leaderboard={leaderboard} apiBaseUrl={publicApiBaseUrl} />
   <SiteFooter />
+  <AttributionTracker />
 </BaseLayout>

@@ -13,6 +13,9 @@ export interface Person {
   // A link to any social network profile (Instagram, X, TikTok, a personal
   // site, …) — never restricted to one platform.
   socialUrl?: string;
+  // Operator-flagged sponsored creator — shown as a small tag next to the
+  // name so a paid placement is never mistaken for an organic one.
+  sponsored?: boolean;
 }
 
 export interface Scene {
@@ -26,4 +29,5 @@ export interface LeaderboardRow {
   rounds: number;
   totalSpentCents: number;
   totalDurationLabel: string;
+  sponsored?: boolean;
 }
