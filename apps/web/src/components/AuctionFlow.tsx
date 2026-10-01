@@ -480,7 +480,9 @@ export default function AuctionFlow({
             </a>
           </div>
           <div style={{ marginTop: 18, fontSize: 11, lineHeight: 1.6, color: "var(--fg-faint)" }}>
-            Terms of participation and deposit rules are on the rules page.
+            By continuing you agree to the{" "}
+            <a href="/terms" style={{ textDecoration: "underline" }}>Terms</a> and{" "}
+            <a href="/privacy" style={{ textDecoration: "underline" }}>Privacy Policy</a>.
           </div>
         </OverlayShell>
       )}

@@ -70,6 +70,15 @@ describe("AuctionFlow", () => {
     expect(screen.getByText("Continue with Apple")).toHaveAttribute("href", "http://api.test/auth/apple");
   });
 
+  it("links the sign-in screen's consent sentence to the Terms and Privacy pages", () => {
+    render(<AuctionFlow />);
+    fireEvent.click(screen.getByText("Displace"));
+    expect(screen.getByText(/By continuing you agree to the/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Terms" })).toHaveAttribute("href", "/terms");
+    expect(screen.getByRole("link", { name: "Privacy Policy" })).toHaveAttribute("href", "/privacy");
+    expect(screen.queryByText(/rules page/)).not.toBeInTheDocument();
+  });
+
   it("defaults apiBaseUrl to localhost when the caller doesn't supply one", () => {
     render(<AuctionFlow />);
     fireEvent.click(screen.getByText("Displace"));
