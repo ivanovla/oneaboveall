@@ -17,6 +17,7 @@ import { registerAuthMeRoutes } from "./routes/authMe";
 import { registerPhotoRoutes } from "./routes/photo";
 import { registerHistoryRoute } from "./routes/history";
 import { registerPageViewsRoute } from "./routes/pageViews";
+import { registerAttributionRoutes } from "./routes/attribution";
 import { stripe, STRIPE_CURRENCY, STRIPE_WEBHOOK_SECRET } from "./stripeClient";
 import { StripePaymentProvider } from "./payments/StripePaymentProvider";
 import { ResendNotifier } from "./notifications/ResendNotifier";
@@ -166,6 +167,7 @@ export function buildServer(
   registerPhotoRoutes(app);
   registerHistoryRoute(app);
   registerPageViewsRoute(app);
+  registerAttributionRoutes(app);
 
   // Liveness/readiness target for the k8s Deployment (see
   // infra/k8s/api.yaml). Deliberately does not touch the database — this
