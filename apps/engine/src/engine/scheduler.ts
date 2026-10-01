@@ -2,11 +2,21 @@ import { eq, and, isNull } from "drizzle-orm";
 import { db } from "../db/client";
 import { reigns, rounds } from "../db/schema";
 import { resolveBiddingPhaseSnapshot } from "./roundResolution";
-import { getQueueLeader } from "../db/repository";
+import { settleRound } from "./settlement";
+import type { PaymentProvider } from "../payments/PaymentProvider";
+import type { Notifier } from "../notifications/Notifier";
 import { CHAMPION_PROCESSING_GAP_MS } from "../domain/config";
 import { nextDailyCloseAt } from "../domain/dailyClose";
 
-export async function tick(now: Date, onInstalled?: (occupantId: string) => void): Promise<void> {
+export type TickDeps = {
+  // Needed to collect the winner's hold (and drop the others) at the close.
+  provider: PaymentProvider;
+  notifier?: Notifier;
+  onInstalled?: (occupantId: string) => void;
+};
+
+export async function tick(now: Date, deps: TickDeps): Promise<void> {
+  const { provider, notifier, onInstalled } = deps;
   const dueBiddingRounds = await db
     .select()
     .from(rounds)
@@ -16,23 +26,27 @@ export async function tick(now: Date, onInstalled?: (occupantId: string) => void
     const snapshotAt = nextDailyCloseAt(round.startsAt);
     if (now.getTime() < snapshotAt.getTime()) continue;
 
-    // A round with no leader can roll into its reign's next round the
-    // instant bidding closes — nobody to install, no artwork to prepare, no
-    // reason to hold it open. A round WITH a leader waits out
-    // CHAMPION_PROCESSING_GAP_MS past snapshotAt before installation below —
-    // the leader is already frozen at this point (isBiddingOpen has already
-    // stopped accepting bids past snapshotAt), so this peek and the
-    // eventual real one inside resolveBiddingPhaseSnapshot always agree.
-    const leader = await getQueueLeader(round.id, snapshotAt);
-    if (leader) {
-      const installAt = new Date(snapshotAt.getTime() + CHAMPION_PROCESSING_GAP_MS);
-      if (now.getTime() < installAt.getTime()) continue;
-    }
-
     try {
+      // Settle first, the instant bidding has closed: collect the winner's
+      // hold (falling back to the runner-up if that fails) and release the
+      // rest. Re-run on every tick until the round is resolved — cheap and
+      // side-effect-free once settled. A transient payment error throws to
+      // the catch below with nothing changed, so the next tick retries.
+      const settlement = await settleRound(round.id, snapshotAt, { provider, notifier }, now);
+
+      // A round with a captured winner waits out CHAMPION_PROCESSING_GAP_MS
+      // past snapshotAt before installation — the outgoing champion keeps
+      // showing while the winner's artwork is prepared. A round where
+      // nothing could be captured (no bids, or every hold failed) has nobody
+      // to install and rolls into its reign's next round right away.
+      if (settlement.outcome === "captured") {
+        const installAt = new Date(snapshotAt.getTime() + CHAMPION_PROCESSING_GAP_MS);
+        if (now.getTime() < installAt.getTime()) continue;
+      }
+
       const result = await resolveBiddingPhaseSnapshot(round.id, snapshotAt, onInstalled, now);
       if (result.outcome === "empty-closed") {
-        // Nobody bid — the reign continues, so it needs a fresh round.
+        // Nobody won — the reign continues, so it needs a fresh round.
         await startNextRound(round.reignId, snapshotAt);
       }
       // result.outcome === "installed": installChampion already started the
@@ -41,11 +55,11 @@ export async function tick(now: Date, onInstalled?: (occupantId: string) => void
       // tick, or another worker instance) already claimed this round in the
       // same instant — that caller is responsible for whatever comes next.
     } catch (err) {
-      // One round's failure (a transient DB error) must not abort the whole
-      // tick — the failing row gets re-selected on every subsequent tick, so
-      // letting it propagate would turn a transient blip into a permanent
-      // poison pill blocking every other due round.
-      console.error(`tick: failed to resolve bidding-phase snapshot for round ${round.id}`, err);
+      // One round's failure (a transient DB or payment-provider error) must
+      // not abort the whole tick — the failing row gets re-selected on every
+      // subsequent tick, so letting it propagate would turn a transient blip
+      // into a permanent poison pill blocking every other due round.
+      console.error(`tick: failed to settle/resolve round ${round.id}`, err);
     }
   }
 }

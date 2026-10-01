@@ -1,8 +1,11 @@
 import { pgTable, text, integer, timestamp, uuid, pgEnum, index, uniqueIndex } from "drizzle-orm/pg-core";
 
-// A round only ever has these two phases now: settlement is synchronous with
-// the bidding window closing (the winner already paid in full when they bid),
-// so there's no intermediate "resolving"/"payment" state to be in.
+// A round only ever has these two phases: settlement (capturing the
+// winner's hold) runs while the round is still "bidding" — at the daily
+// close, before the champion-processing gap — and the round flips to
+// "closed" only when it is finally resolved, so there's no separate
+// "resolving"/"payment" phase to be in. Whether settlement has happened is
+// read from the bids themselves (bids.captured_at).
 export const roundPhaseEnum = pgEnum("round_phase", ["bidding", "closed"]);
 
 export const reigns = pgTable("reigns", {
@@ -20,14 +23,26 @@ export const rounds = pgTable("rounds", {
   phase: roundPhaseEnum("phase").notNull().default("bidding"),
 });
 
-// Every bid is a real, full-amount Stripe charge collected up front — there
-// is no separate deposit concept. paymentRef is that charge's PaymentIntent
-// id: unique per row so a redelivered `payment_intent.succeeded` webhook is a
-// safe no-op instead of recording the same bid twice. refundedAt is null
-// while the money is still ours (this bid is either the round's current
-// leader, or already won a closed round) and gets set the instant another
-// bidder outbids it — at that point the full amount is handed straight back,
-// there is nothing left to reconcile at round close.
+// Every bid is a Stripe *authorization hold* for its full amount
+// (PaymentIntent with capture_method: "manual"), not a charge — only the
+// round's winner is ever actually collected, at the daily close (see
+// engine/settlement.ts). paymentRef is that hold's PaymentIntent id: unique
+// per row so a redelivered webhook (or the `succeeded` event our own capture
+// fires after the `amount_capturable_updated` one that recorded the bid) is a
+// safe no-op instead of recording the same bid twice.
+//
+// refundedAt keeps its historical name (column refunded_at) but now means
+// "released": the hold was cancelled, or — for a bid placed before holds
+// existed, or one already captured — the charge was refunded. Either way the
+// bidder owes nothing for it any more. Null while the hold is still alive:
+// at most two per round at a time, the leader and the runner-up kept as the
+// fallback in case capturing the leader fails (see recordBid.ts).
+//
+// capturedAt is set once the hold has actually been collected — the bid
+// won its round. captureFailedAt records that settlement tried to collect
+// this bid and the attempt definitively failed (declined, hold expired or
+// cancelled); such a bid is also released (refundedAt set) so settlement
+// moves on to the runner-up.
 export const bids = pgTable("bids", {
   id: uuid("id").defaultRandom().primaryKey(),
   roundId: uuid("round_id").notNull().references(() => rounds.id),
@@ -35,6 +50,8 @@ export const bids = pgTable("bids", {
   amountCents: integer("amount_cents").notNull(),
   paymentRef: text("payment_ref").notNull(),
   refundedAt: timestamp("refunded_at", { withTimezone: true }),
+  capturedAt: timestamp("captured_at", { withTimezone: true }),
+  captureFailedAt: timestamp("capture_failed_at", { withTimezone: true }),
   placedAt: timestamp("placed_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   // Supports the leader query (WHERE round_id = ? ORDER BY amount_cents DESC,
