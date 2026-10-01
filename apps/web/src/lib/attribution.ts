@@ -16,8 +16,9 @@
 //
 // Every storage access is wrapped: localStorage/sessionStorage throw in
 // some private modes and with blocked site data, and attribution is never
-// worth breaking the page over. Values are only lightly trimmed here — the
-// API is the one that sanitizes (^[A-Za-z0-9_.-]{1,64}$) and drops junk.
+// worth breaking the page over. Values are normalized here into the shape
+// the API accepts (^[A-Za-z0-9_.-]{1,64}$ — see normalizeAttributionValue);
+// the API still validates and drops anything else.
 
 export const ATTRIBUTION_STORAGE_KEY = "oneaboveall:attribution";
 export const REF_VISIT_SESSION_KEY = "oneaboveall:ref-visit-sent";
@@ -41,9 +42,25 @@ const PARAMS: [param: string, field: keyof Omit<StoredAttribution, "landingAt" |
   ["utm_content", "utmContent"],
 ];
 
-// Generous client-side cap only so a pathological URL can't fill storage;
-// the real validation is server-side.
-const MAX_VALUE_LENGTH = 200;
+// The API's limit (engine/domain/attribution.ts).
+const MAX_VALUE_LENGTH = 64;
+
+// Brings a raw tag into the shape the API accepts, so a hand-typed link
+// still counts instead of being silently dropped server-side — which would
+// matter more than it looks: the stored first touch is write-once, and
+// sendAttributionIfNeeded marks it sent even when the server dropped every
+// value, so a tag that doesn't survive sanitization is lost for good.
+// Streamers write things like utm_campaign=launch day: trim, turn
+// whitespace into "-", drop every character outside [A-Za-z0-9_.-], and
+// cut to 64. Null when nothing usable is left.
+export function normalizeAttributionValue(raw: string): string | null {
+  const value = raw
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/[^A-Za-z0-9_.-]/g, "")
+    .slice(0, MAX_VALUE_LENGTH);
+  return value || null;
+}
 
 export function readStoredAttribution(): StoredAttribution | null {
   try {
@@ -70,9 +87,10 @@ export function parseAttribution(search: string, now: Date = new Date()): Stored
   const result: StoredAttribution = { landingAt: now.toISOString() };
   let found = false;
   for (const [param, field] of PARAMS) {
-    const value = params.get(param)?.trim();
+    const raw = params.get(param);
+    const value = raw === null ? null : normalizeAttributionValue(raw);
     if (value) {
-      result[field] = value.slice(0, MAX_VALUE_LENGTH);
+      result[field] = value;
       found = true;
     }
   }

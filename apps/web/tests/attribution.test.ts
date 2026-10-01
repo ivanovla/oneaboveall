@@ -31,6 +31,24 @@ describe("parseAttribution", () => {
     });
   });
 
+  it("normalizes values so they survive the server's sanitization (^[A-Za-z0-9_.-]{1,64}$)", () => {
+    const parsed = parseAttribution(
+      `?ref=${encodeURIComponent(" Bob's Stream! ")}&utm_campaign=launch%20day&utm_source=tw%C3%AFtch&utm_content=${"x".repeat(80)}`,
+      new Date("2026-10-02T00:00:00Z"),
+    );
+    expect(parsed).toEqual({
+      ref: "Bobs-Stream",
+      utmCampaign: "launch-day",
+      utmSource: "twtch",
+      utmContent: "x".repeat(64),
+      landingAt: "2026-10-02T00:00:00.000Z",
+    });
+  });
+
+  it("treats a value with nothing usable left as absent", () => {
+    expect(parseAttribution("?ref=%F0%9F%8E%AE%F0%9F%8E%AE")).toBeNull();
+  });
+
   it("returns null without any attribution params", () => {
     expect(parseAttribution("")).toBeNull();
     expect(parseAttribution("?foo=bar&ref=")).toBeNull();
