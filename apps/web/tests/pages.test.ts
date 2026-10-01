@@ -80,6 +80,9 @@ describe("legal pages", () => {
     expect(html).toMatch(/Payments — you pay only if you win/);
     expect(html).toMatch(/right of withdrawal/);
     expect(html).toMatch(/laws of Spain/);
+    // Every bid — not just the leading one — is public in the live feed.
+    expect(html).toMatch(/live bid feed/);
+    expect(html).toMatch(/stream overlay/);
     expect(html).toContain('href="/"');
     expect(html).not.toMatch(/draft/i);
   });
@@ -92,6 +95,8 @@ describe("legal pages", () => {
     expect(html).toContain("Last updated: October 2, 2026");
     expect(html).toContain("Devvally");
     for (const p of ["Stripe", "Resend", "Hetzner", "AEPD"]) expect(html).toContain(p);
+    expect(html).toMatch(/live bid feed/);
+    expect(html).toMatch(/stream overlay/);
     expect(html).toContain('href="/"');
     expect(html).not.toMatch(/draft/i);
   });

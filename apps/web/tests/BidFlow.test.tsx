@@ -198,11 +198,18 @@ describe("BidFlow — terms consent", () => {
 });
 
 describe("BidFlow — public display name", () => {
-  it("tells the bidder which name is shown publicly while they lead", async () => {
+  it("tells the bidder which name is shown, and that name and amount appear in the live bid feed and on streams — not only while leading", async () => {
     global.fetch = mockFetch({}) as unknown as typeof fetch;
     render(<BidFlow apiBaseUrl="http://api.test" onDone={vi.fn()} />);
     await waitFor(() => expect(screen.getByText(/shown publicly as/i)).toBeInTheDocument());
     expect(screen.getByText("A")).toBeInTheDocument();
+    const notice = screen.getByText(/shown publicly as/i).textContent ?? "";
+    expect(notice).toMatch(/display name and bid amount/i);
+    expect(notice).toMatch(/live bid feed/i);
+    expect(notice).toMatch(/streams showing our overlay/i);
+    expect(notice).toMatch(/as the leader/i);
+    // The old copy implied nothing was public unless you were leading.
+    expect(notice).not.toMatch(/^While you lead/);
   });
 
   it("lets them change it inline via PATCH /auth/name", async () => {

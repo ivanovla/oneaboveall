@@ -394,16 +394,20 @@ export default function BidFlow({ apiBaseUrl, onDone }: { apiBaseUrl: string; on
           Your card is only authorized now — you're charged only if you hold the top bid when bidding closes at 4 PM ET. If you're outbid, the hold is released.
         </div>
         {/*
-          The leader's name goes on the homepage, the OBS overlay streamers
-          put on air, and the live bid feed — say so before they bid, and let
-          them pick what's shown right here (PATCH /auth/name) rather than
-          discovering their full legal name on someone's stream.
+          Every bid — not only the leading one — is public: /current-round's
+          recentBids lists the name and amount of each recent bidder,
+          outbid ones included, in the live bid feed on the homepage and on
+          the OBS overlay streamers put on air; the leader's name is shown
+          on top of that. Say all of it before they bid, and let them pick
+          what's shown right here (PATCH /auth/name) rather than discovering
+          their full legal name next to their bid on someone's stream.
         */}
         {sessionUser && (
           <div style={{ marginTop: 14, fontSize: 12, lineHeight: 1.6, color: "var(--fg-dim)" }}>
             {nameDraft === null ? (
               <>
-                While you lead, you're shown publicly as{" "}
+                Your display name and bid amount appear publicly in the live bid feed (including on streams
+                showing our overlay) and, while you lead, as the leader. You're shown publicly as{" "}
                 <strong style={{ color: "var(--fg)" }}>{sessionUser.name.trim() || "Anonymous"}</strong>
                 {" · "}
                 <button
