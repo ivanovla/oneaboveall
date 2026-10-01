@@ -1,5 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vitest";
+import { eq } from "drizzle-orm";
 import { buildServer } from "../src/server";
+import { db, pool } from "engine/db/client";
+import { users } from "engine/db/schema";
 
 const { paymentIntentCreate } = vi.hoisted(() => ({
   paymentIntentCreate: vi.fn(async () => ({ client_secret: "pi_1_secret" })),
@@ -25,19 +28,47 @@ vi.mock("../src/auth/requireSession", () => ({
   requireSession: vi.fn(async () => ({ id: "challenger", email: "c@example.com", name: "C", photoPath: null, socialUrl: null })),
 }));
 
+// The route now writes to (users.terms_accepted_at) and reads from (the
+// bidder's attribution) the real users row, so the mocked session user has
+// to be a real row too — its id is swapped in per test below.
+let sessionUserId = "";
+
+afterEach(async () => {
+  await db.delete(users);
+});
+
+afterAll(async () => {
+  await pool.end();
+});
+
 describe("POST /bids", () => {
   beforeEach(async () => {
     const { prepareBid } = await import("engine/engine/prepareBid");
     vi.mocked(prepareBid).mockClear();
     paymentIntentCreate.mockClear();
+
+    const [user] = await db
+      .insert(users)
+      .values({ provider: "google", providerId: "g-bid", email: "c@example.com", name: "C" })
+      .returning();
+    sessionUserId = user.id;
+    const { requireSession } = await import("../src/auth/requireSession");
+    vi.mocked(requireSession).mockImplementation(async () => ({
+      id: sessionUserId,
+      email: "c@example.com",
+      name: "C",
+      photoPath: null,
+      socialUrl: null,
+      characterRequest: null,
+    }));
   });
 
-  it("creates a full-amount PaymentIntent and returns its client secret", async () => {
+  it("creates a full-amount, manual-capture PaymentIntent (an authorization hold) and returns its client secret", async () => {
     const app = buildServer();
     const response = await app.inject({
       method: "POST",
       url: "/bids",
-      payload: { amountCents: 11_000 },
+      payload: { amountCents: 11_000, acceptedTerms: true },
     });
 
     expect(response.statusCode).toBe(200);
@@ -47,12 +78,16 @@ describe("POST /bids", () => {
       expect.objectContaining({
         amount: 11_000,
         currency: "usd",
-        metadata: expect.objectContaining({ kind: "bid", roundId: "round-1", bidderId: "challenger" }),
+        // Only the round's winner is ever collected — see
+        // engine/engine/settlement.ts. Everyone else's hold is released.
+        capture_method: "manual",
+        description: "oneaboveall.org seat bid",
+        metadata: expect.objectContaining({ kind: "bid", roundId: "round-1", bidderId: sessionUserId }),
       }),
     );
 
     const { prepareBid } = await import("engine/engine/prepareBid");
-    expect(prepareBid).toHaveBeenCalledWith({ bidderId: "challenger", amountCents: 11_000, now: expect.any(Date) });
+    expect(prepareBid).toHaveBeenCalledWith({ bidderId: sessionUserId, amountCents: 11_000, now: expect.any(Date) });
   });
 
   it("returns 401 when not signed in", async () => {
@@ -65,7 +100,7 @@ describe("POST /bids", () => {
     });
 
     const app = buildServer();
-    const response = await app.inject({ method: "POST", url: "/bids", payload: { amountCents: 11_000 } });
+    const response = await app.inject({ method: "POST", url: "/bids", payload: { amountCents: 11_000, acceptedTerms: true } });
     expect(response.statusCode).toBe(401);
     expect(prepareBid).not.toHaveBeenCalled();
     expect(paymentIntentCreate).not.toHaveBeenCalled();
@@ -79,12 +114,12 @@ describe("POST /bids", () => {
     const response = await app.inject({
       method: "POST",
       url: "/bids",
-      payload: { bidderId: "victim", amountCents: 11_000 },
+      payload: { bidderId: "victim", amountCents: 11_000, acceptedTerms: true },
     });
 
     expect(response.statusCode).toBe(200);
     const { prepareBid } = await import("engine/engine/prepareBid");
-    expect(prepareBid).toHaveBeenCalledWith({ bidderId: "challenger", amountCents: 11_000, now: expect.any(Date) });
+    expect(prepareBid).toHaveBeenCalledWith({ bidderId: sessionUserId, amountCents: 11_000, now: expect.any(Date) });
   });
 
   it("rejects a malformed body with 400", async () => {
@@ -102,11 +137,54 @@ describe("POST /bids", () => {
     const response = await app.inject({
       method: "POST",
       url: "/bids",
-      payload: { amountCents: 11_000 },
+      payload: { amountCents: 11_000, acceptedTerms: true },
     });
 
     expect(response.statusCode).toBe(422);
     expect(response.json().error).toContain("not accepting bids");
     expect(paymentIntentCreate).not.toHaveBeenCalled();
+  });
+
+  it("rejects a bid without acceptedTerms: true with 400, never placing a hold", async () => {
+    const app = buildServer();
+    for (const acceptedTerms of [undefined, false, "true", 1]) {
+      const response = await app.inject({ method: "POST", url: "/bids", payload: { amountCents: 11_000, acceptedTerms } });
+      expect(response.statusCode).toBe(400);
+    }
+    expect(paymentIntentCreate).not.toHaveBeenCalled();
+    const [row] = await db.select().from(users).where(eq(users.id, sessionUserId));
+    expect(row.termsAcceptedAt).toBeNull();
+  });
+
+  it("stamps terms_accepted_at on the first accepted bid only", async () => {
+    const app = buildServer();
+    await app.inject({ method: "POST", url: "/bids", payload: { amountCents: 11_000, acceptedTerms: true } });
+    const [first] = await db.select().from(users).where(eq(users.id, sessionUserId));
+    expect(first.termsAcceptedAt).toBeInstanceOf(Date);
+
+    await app.inject({ method: "POST", url: "/bids", payload: { amountCents: 12_000, acceptedTerms: true } });
+    const [second] = await db.select().from(users).where(eq(users.id, sessionUserId));
+    expect(second.termsAcceptedAt).toEqual(first.termsAcceptedAt);
+  });
+
+  it("copies the bidder's ref/utm attribution into the PaymentIntent metadata, omitting empty fields", async () => {
+    await db.update(users).set({ ref: "streamer_bob", utmSource: "twitch", attributedAt: new Date() }).where(eq(users.id, sessionUserId));
+
+    const app = buildServer();
+    await app.inject({ method: "POST", url: "/bids", payload: { amountCents: 11_000, acceptedTerms: true } });
+
+    const metadata = (paymentIntentCreate.mock.calls[0] as unknown as [{ metadata: Record<string, string> }])[0].metadata;
+    expect(metadata.ref).toBe("streamer_bob");
+    expect(metadata.utm_source).toBe("twitch");
+    expect(metadata).not.toHaveProperty("utm_medium");
+    expect(metadata).not.toHaveProperty("utm_campaign");
+    expect(metadata).not.toHaveProperty("utm_content");
+  });
+
+  it("sends no attribution keys for an unattributed bidder", async () => {
+    const app = buildServer();
+    await app.inject({ method: "POST", url: "/bids", payload: { amountCents: 11_000, acceptedTerms: true } });
+    const metadata = (paymentIntentCreate.mock.calls[0] as unknown as [{ metadata: Record<string, string> }])[0].metadata;
+    expect(Object.keys(metadata).sort()).toEqual(["amountCents", "bidderId", "kind", "roundId"]);
   });
 });

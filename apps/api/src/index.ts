@@ -1,7 +1,16 @@
 import { buildServer } from "./server";
 import { startScheduler } from "./scheduler";
+import { stripe } from "./stripeClient";
+import { StripePaymentProvider } from "./payments/StripePaymentProvider";
+import { ResendNotifier } from "./notifications/ResendNotifier";
 
-const app = buildServer();
+// One provider and one notifier for the whole process, shared by the
+// webhook (recording bids, releasing outbid holds, outbid emails) and the
+// scheduler (capturing winners at the close, won emails).
+const provider = new StripePaymentProvider(stripe);
+const notifier = new ResendNotifier();
+
+const app = buildServer({ provider, notifier });
 const port = Number(process.env.PORT ?? 3001);
 // 127.0.0.1 by default so local dev never accidentally accepts connections
 // from outside the machine. A container has no "outside" to protect against
@@ -20,4 +29,4 @@ app.listen({ port, host }, (err) => {
 // Drives bidding-window close/champion-install (see scheduler.ts's own
 // comment) — independent of whether the listen callback above has fired
 // yet, since it doesn't touch the HTTP server at all.
-startScheduler();
+startScheduler({ provider, notifier });

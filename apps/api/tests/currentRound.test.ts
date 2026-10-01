@@ -23,8 +23,13 @@ vi.mock("engine/queries/publicScene", () => ({
     phase: "bidding",
     currentLeaderCents: 421_000,
     biddingClosesAt: new Date("2026-09-22T12:00:00.000Z"),
+    leader: { name: "Alice", sponsored: false },
+    champion: { name: "Rita", sponsored: true },
+    recentBids: [{ name: "Alice", amountCents: 421_000, placedAt: new Date("2026-09-22T11:00:00.000Z") }],
   })),
 }));
+
+const NO_DRAMA = { leader: null, champion: null, recentBids: [] };
 
 describe("GET /current-round", () => {
   it("returns the current round info as JSON", async () => {
@@ -35,6 +40,17 @@ describe("GET /current-round", () => {
     const body = response.json();
     expect(body.roundId).toBe("round-1");
     expect(body.biddingClosesAt).toBe("2026-09-22T12:00:00.000Z");
+  });
+
+  // The homepage "Leading: NAME" line and the OBS overlay's feed. The
+  // engine query guarantees these never carry ids or emails (see
+  // engine/tests/queries/publicScene.test.ts); the route passes them through.
+  it("passes through the public leader, champion and recent bids", async () => {
+    const app = buildServer();
+    const body = (await app.inject({ method: "GET", url: "/current-round" })).json();
+    expect(body.leader).toEqual({ name: "Alice", sponsored: false });
+    expect(body.champion).toEqual({ name: "Rita", sponsored: true });
+    expect(body.recentBids).toEqual([{ name: "Alice", amountCents: 421_000, placedAt: "2026-09-22T11:00:00.000Z" }]);
   });
 
   // Every homepage visitor polls this route (AuctionFlow.tsx's live
@@ -67,6 +83,7 @@ describe("GET /current-round", () => {
       phase: "bidding",
       currentLeaderCents: 100_000,
       biddingClosesAt: new Date("2026-09-23T12:00:00.000Z"),
+      ...NO_DRAMA,
     });
 
     const app = buildServer();
@@ -94,6 +111,7 @@ describe("GET /current-round", () => {
       phase: "bidding",
       currentLeaderCents: 200_000,
       biddingClosesAt: new Date("2026-09-23T13:00:00.000Z"),
+      ...NO_DRAMA,
     });
 
     const recovered = await app.inject({ method: "GET", url: "/current-round" });

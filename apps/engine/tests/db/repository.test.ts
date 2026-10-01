@@ -144,4 +144,16 @@ describe("getBidderHistory", () => {
       { amountCents: 11_000, placedAt: new Date(2026, 0, 1, 11), status: "refunded" },
     ]);
   });
+
+  // The round stays "bidding" through the champion-processing gap, but once
+  // settlement has captured a bid it has won — it must not keep reading as
+  // "active" for those hours.
+  it("reports a captured bid as won even while its round is still in the processing gap", async () => {
+    const [reign] = await db.insert(reigns).values({ occupantId: "champ", priceCents: 10_000, startedAt: new Date(2026, 0, 1) }).returning();
+    const [round] = await db.insert(rounds).values({ reignId: reign.id, startsAt: new Date(2026, 0, 1), phase: "bidding" }).returning();
+    await db.insert(bids).values({ roundId: round.id, bidderId: "a", amountCents: 11_000, paymentRef: "pi_a", placedAt: new Date(2026, 0, 1, 11), capturedAt: new Date(2026, 0, 1, 16) });
+
+    const history = await getBidderHistory("a");
+    expect(history[0].bids[0].status).toBe("won");
+  });
 });

@@ -70,6 +70,15 @@ describe("AuctionFlow", () => {
     expect(screen.getByText("Continue with Apple")).toHaveAttribute("href", "http://api.test/auth/apple");
   });
 
+  it("links the sign-in screen's consent sentence to the Terms and Privacy pages", () => {
+    render(<AuctionFlow />);
+    fireEvent.click(screen.getByText("Displace"));
+    expect(screen.getByText(/By continuing you agree to the/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Terms" })).toHaveAttribute("href", "/terms");
+    expect(screen.getByRole("link", { name: "Privacy Policy" })).toHaveAttribute("href", "/privacy");
+    expect(screen.queryByText(/rules page/)).not.toBeInTheDocument();
+  });
+
   it("defaults apiBaseUrl to localhost when the caller doesn't supply one", () => {
     render(<AuctionFlow />);
     fireEvent.click(screen.getByText("Displace"));
@@ -322,5 +331,80 @@ describe("AuctionFlow — leaderboard", () => {
     fireEvent.click(screen.getByText("Close"));
     expect(screen.queryByText("Who held the seat the longest")).not.toBeInTheDocument();
     expect(screen.getByText("Displace")).toBeInTheDocument();
+  });
+});
+
+describe("AuctionFlow — who's leading", () => {
+  function mockRound(round: Record<string, unknown>) {
+    global.fetch = vi.fn(async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path === "/current-round") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ roundId: "round-1", phase: "bidding", currentLeaderCents: 150_000, biddingClosesAt: "2026-09-23T12:00:00.000Z", ...round }),
+        };
+      }
+      return { ok: false, status: 401 };
+    }) as unknown as typeof fetch;
+  }
+
+  it("names the current leader under the price", async () => {
+    mockRound({ leader: { name: "Alice", sponsored: false }, recentBids: [] });
+    render(<AuctionFlow />);
+    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+    expect(screen.getByText(/Leading:/)).toBeInTheDocument();
+    expect(screen.queryByText("Sponsored")).not.toBeInTheDocument();
+  });
+
+  it("tags a sponsored leader", async () => {
+    mockRound({ leader: { name: "Streamer", sponsored: true }, recentBids: [] });
+    render(<AuctionFlow />);
+    await waitFor(() => expect(screen.getByText("Streamer")).toBeInTheDocument());
+    expect(screen.getByText("Sponsored")).toBeInTheDocument();
+  });
+
+  it("says nobody has bid yet when there's no leader", async () => {
+    mockRound({ leader: null, recentBids: [] });
+    render(<AuctionFlow />);
+    await waitFor(() => expect(screen.getByText("No bids yet this round")).toBeInTheDocument());
+  });
+
+  it("shows no leader line against an older API that doesn't send one", async () => {
+    mockRound({});
+    render(<AuctionFlow />);
+    await waitFor(() => expect(screen.getByText("$1,500")).toBeInTheDocument());
+    expect(screen.queryByText(/Leading:|No bids yet/)).not.toBeInTheDocument();
+  });
+});
+
+describe("AuctionFlow — attribution hand-off", () => {
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  it("PATCHes stored first-touch attribution once the visitor is known to be signed in", async () => {
+    localStorage.setItem("oneaboveall:attribution", JSON.stringify({ ref: "bob", landingAt: "2026-10-02T00:00:00.000Z" }));
+    global.fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path === "/auth/me") return { ok: true, status: 200, json: async () => ({ id: "u1", photoPath: "u1.jpg" }) };
+      if (path === "/current-round") return { ok: true, status: 200, json: async () => null };
+      if (path === "/auth/attribution" && init?.method === "PATCH") return { ok: true, status: 200, json: async () => ({ recorded: true }) };
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as unknown as typeof fetch;
+
+    render(<AuctionFlow apiBaseUrl="http://api.test" />);
+    await waitFor(() =>
+      expect(global.fetch).toHaveBeenCalledWith("http://api.test/auth/attribution", expect.objectContaining({ method: "PATCH", credentials: "include" })),
+    );
+    await waitFor(() => expect(JSON.parse(localStorage.getItem("oneaboveall:attribution")!).sentAt).toBeTruthy());
+  });
+
+  it("never sends it for a signed-out visitor", async () => {
+    localStorage.setItem("oneaboveall:attribution", JSON.stringify({ ref: "bob", landingAt: "2026-10-02T00:00:00.000Z" }));
+    render(<AuctionFlow apiBaseUrl="http://api.test" />);
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledWith("http://api.test/auth/me", { credentials: "include" }));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(global.fetch).not.toHaveBeenCalledWith("http://api.test/auth/attribution", expect.anything());
   });
 });

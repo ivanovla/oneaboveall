@@ -1,0 +1,197 @@
+---
+import LegalLayout from "../layouts/LegalLayout.astro";
+
+const CONTACT = "oneabovealldotorg@gmail.com";
+---
+<LegalLayout
+  title="Privacy — oneaboveall"
+  heading="Privacy Policy"
+  description="What oneaboveall.org collects, why, who processes it, how long we keep it, and your rights under the GDPR."
+  lastUpdated="October 2, 2026"
+>
+  <p>
+    This policy explains what personal data oneaboveall.org (the "site")
+    collects, why, and what rights you have. We try to collect as little as
+    possible. We do not sell your data.
+  </p>
+
+  <h2>1. Who is responsible</h2>
+  <p>
+    The data controller is <strong>Devvally</strong>, based in Spain. For any
+    privacy question or request, email
+    <a href={`mailto:${CONTACT}`}>{CONTACT}</a>.
+  </p>
+
+  <h2>2. What we collect</h2>
+  <h3>If you only visit</h3>
+  <ul>
+    <li>
+      <strong>An aggregate page-view counter.</strong> Each page load adds one
+      to a single total. It is not linked to you.
+    </li>
+    <li>
+      <strong>Referral parameters.</strong> If you arrive through a link with
+      <code>ref</code> or <code>utm_*</code> parameters (for example from a
+      creator), we store them in your browser's local storage, and count the
+      visit against that referral code (a number, not a profile of you).
+    </li>
+    <li>
+      <strong>Your theme choice</strong> (light/dark), in local storage.
+    </li>
+    <li>
+      <strong>Technical logs</strong> our servers keep for security and
+      troubleshooting (such as IP address and request time).
+    </li>
+  </ul>
+  <h3>If you sign in and bid</h3>
+  <ul>
+    <li>
+      <strong>Your name and email address</strong> from Google or Apple
+      sign-in (we never see your Google or Apple password).
+    </li>
+    <li>
+      <strong>Your display name</strong>, which is shown publicly while you
+      lead a round, while you hold the seat, and on the leaderboard and
+      history. <strong>Each bid you place</strong> — your display name and
+      the bid amount — also appears publicly in the live bid feed of recent
+      bids, including bids that were later outbid, both on the site and on
+      the stream overlay that streamers can show on their live streams (so
+      it may be broadcast and recorded by third-party streaming platforms).
+    </li>
+    <li>
+      <strong>Your bids and their payment status</strong> (amount, time,
+      authorized / charged / released). Card details are entered directly into
+      Stripe; we never receive your full card number.
+    </li>
+    <li>
+      <strong>First-touch referral data</strong> (the <code>ref</code> /
+      <code>utm_*</code> values you first arrived with), attached to your
+      account so we know which creators bring bidders.
+    </li>
+    <li>
+      <strong>A session cookie</strong> that keeps you signed in. It is
+      strictly necessary for the service, so we don't ask for consent for
+      it. We use no advertising or third-party tracking cookies.
+    </li>
+  </ul>
+  <h3>If you win</h3>
+  <ul>
+    <li>
+      <strong>Your photo</strong> and any description of how you'd like your
+      character drawn. Your raw photo is private: only you and we can access
+      it. Only the redrawn artwork is shown publicly.
+    </li>
+    <li>
+      <strong>An optional social link</strong>, shown publicly on the
+      champion card.
+    </li>
+  </ul>
+
+  <h2>3. Why we use it, and our legal basis</h2>
+  <ul>
+    <li>
+      <strong>To run the auction and deliver what you paid for</strong>
+      (account, bids, holds and charges, showing your name, redrawing the
+      artwork with your photo, emails telling you you've been outbid or won)
+      — <em>performance of our contract with you</em> (GDPR Art. 6(1)(b)).
+    </li>
+    <li>
+      <strong>To keep payment and accounting records</strong> —
+      <em>legal obligation</em> (Art. 6(1)(c)), e.g. Spanish tax law.
+    </li>
+    <li>
+      <strong>To measure which referral links and creators work, prevent
+      fraud and abuse, moderate content and keep the site secure</strong> —
+      our <em>legitimate interests</em> (Art. 6(1)(f)). You can object at any
+      time (see your rights below).
+    </li>
+    <li>
+      <strong>Your photo</strong> is used only to make the artwork, because you
+      upload it for that purpose and confirm you have the right to do so.
+    </li>
+  </ul>
+
+  <h2>4. Who processes your data for us</h2>
+  <p>We share data only with service providers that help us run the site, under data-processing terms:</p>
+  <ul>
+    <li><strong>Stripe</strong> — card payments, authorization holds and fraud prevention.</li>
+    <li><strong>Google</strong> and <strong>Apple</strong> — sign-in, if you choose them.</li>
+    <li><strong>Resend</strong> — sending our emails (outbid / won notifications).</li>
+    <li><strong>Hetzner</strong> — hosting our servers and database in the EU.</li>
+  </ul>
+  <p>
+    We may also disclose data where the law requires it, or to protect our
+    rights (for example, in a payment dispute).
+  </p>
+
+  <h2>5. International transfers</h2>
+  <p>
+    Our servers are in the EU. Some providers above (such as Stripe, Google,
+    Apple and Resend) may process data in the United States or elsewhere.
+    Where they do, the transfer is covered by the EU–US Data Privacy
+    Framework or the European Commission's Standard Contractual Clauses.
+  </p>
+
+  <h2>6. How long we keep it</h2>
+  <ul>
+    <li>
+      <strong>Account data</strong> (name, email, display name, referral
+      data): while your account is active, and deleted when you ask us to
+      delete it — except what we must keep below.
+    </li>
+    <li>
+      <strong>Bids and payment records</strong>: as long as tax and
+      accounting law requires (in Spain, generally up to 6 years).
+    </li>
+    <li>
+      <strong>Your photo</strong>: while you are or have been the champion,
+      so the archive of past scenes stays accurate, and deleted on request.
+      Artwork that was already published may remain in the archive, but we
+      will remove your name and link from it on request.
+    </li>
+    <li><strong>Server logs</strong>: a short period, typically no more than 30 days.</li>
+    <li>
+      <strong>Local storage</strong> (theme, referral) stays in your browser
+      until you clear it; the session cookie expires when you sign out or
+      after it lapses.
+    </li>
+  </ul>
+
+  <h2>7. Your rights</h2>
+  <p>Under the GDPR you can ask us to:</p>
+  <ul>
+    <li>give you a copy of your data (access) and send it to you in a portable format;</li>
+    <li>correct inaccurate data;</li>
+    <li>delete your data;</li>
+    <li>restrict how we use it, or object to processing based on our legitimate interests.</li>
+  </ul>
+  <p>
+    Email <a href={`mailto:${CONTACT}`}>{CONTACT}</a> and we'll reply within
+    one month. If you're unhappy with how we handle your data, you can
+    complain to the Spanish data protection authority, the
+    <strong>Agencia Española de Protección de Datos (AEPD)</strong>,
+    <a href="https://www.aepd.es" rel="noopener">www.aepd.es</a>, or to the
+    authority in the country where you live.
+  </p>
+
+  <h2>8. We don't sell your data</h2>
+  <p>
+    We don't sell or rent personal data, and we don't use it for third-party
+    advertising.
+  </p>
+
+  <h2>9. Children</h2>
+  <p>
+    The site is not for children. You must be 18 or older to sign in and bid,
+    and photos of anyone under 18 are not allowed. If you believe a minor has
+    given us data, contact us and we will delete it.
+  </p>
+
+  <h2>10. Changes to this policy</h2>
+  <p>
+    We may update this policy. The date at the top shows the latest version;
+    if a change is significant we'll point it out on the site or by email.
+  </p>
+
+  <p>See also our <a href="/terms">Terms of Service</a>.</p>
+</LegalLayout>

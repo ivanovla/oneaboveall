@@ -17,8 +17,13 @@ import { registerAuthMeRoutes } from "./routes/authMe";
 import { registerPhotoRoutes } from "./routes/photo";
 import { registerHistoryRoute } from "./routes/history";
 import { registerPageViewsRoute } from "./routes/pageViews";
+import { registerAttributionRoutes } from "./routes/attribution";
+import { registerAdminRoutes } from "./routes/admin";
 import { stripe, STRIPE_CURRENCY, STRIPE_WEBHOOK_SECRET } from "./stripeClient";
 import { StripePaymentProvider } from "./payments/StripePaymentProvider";
+import { ResendNotifier } from "./notifications/ResendNotifier";
+import type { PaymentProvider } from "engine/payments/PaymentProvider";
+import type { Notifier } from "engine/notifications/Notifier";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -26,8 +31,21 @@ declare module "fastify" {
   }
 }
 
-export function buildServer(): FastifyInstance {
+// index.ts passes the same provider/notifier instances it hands to the
+// scheduler (so e.g. the "RESEND_API_KEY unset" warning is logged once per
+// process, not once per consumer); tests that don't care get the defaults.
+export function buildServer(
+  deps: { provider?: PaymentProvider; notifier?: Notifier } = {},
+): FastifyInstance {
   const app = Fastify({
+    // The API is only reachable through the Traefik ingress (its Service is
+    // ClusterIP — infra/k8s/api.yaml), so every request's socket address is
+    // Traefik's own pod. Trusting exactly one hop makes request.ip the
+    // address Traefik appended to X-Forwarded-For — the real client — which
+    // the /ref-visits limiter keys on. One hop, not `true`: with `true`
+    // Fastify would take the leftmost X-Forwarded-For entry, which the
+    // client itself writes and could set to anything.
+    trustProxy: 1,
     logger: {
       // Fastify's default request serializer logs the full request URL,
       // including its query string. Several routes put credential-shaped
@@ -143,20 +161,23 @@ export function buildServer(): FastifyInstance {
   if (!STRIPE_WEBHOOK_SECRET) {
     throw new Error("STRIPE_WEBHOOK_SECRET is required.");
   }
-  const stripeProvider = new StripePaymentProvider(stripe);
+  const stripeProvider = deps.provider ?? new StripePaymentProvider(stripe);
+  const notifier = deps.notifier ?? new ResendNotifier();
 
   registerSceneRoute(app);
   registerLeaderboardRoute(app);
   registerCurrentRoundRoute(app);
   registerPlaceBidRoute(app, stripe, STRIPE_CURRENCY);
   registerRoundParticipationRoute(app);
-  registerStripeWebhookRoute(app, stripe, STRIPE_WEBHOOK_SECRET, stripeProvider);
+  registerStripeWebhookRoute(app, stripe, STRIPE_WEBHOOK_SECRET, stripeProvider, notifier, STRIPE_CURRENCY);
   registerGoogleAuthRoutes(app);
   registerAppleAuthRoutes(app);
   registerAuthMeRoutes(app);
   registerPhotoRoutes(app);
   registerHistoryRoute(app);
   registerPageViewsRoute(app);
+  registerAttributionRoutes(app);
+  registerAdminRoutes(app);
 
   // Liveness/readiness target for the k8s Deployment (see
   // infra/k8s/api.yaml). Deliberately does not touch the database — this

@@ -112,6 +112,17 @@ APPLE_PRIVATE_KEY_PATH=./apple-private-key.p8
 
 PUBLIC_APP_URL=https://oneaboveall.org
 API_PUBLIC_URL=https://api.oneaboveall.org
+
+# Outbid / won emails (see "Email" below). Unset RESEND_API_KEY = emails are
+# skipped (one warning in the api log), nothing else breaks.
+RESEND_API_KEY=re_...
+EMAIL_FROM=oneaboveall <noreply@oneaboveall.org>
+
+# Bearer token for the operator-only /admin API (see "Operator runbook"
+# below). Unset/empty = every /admin route 404s. Generate with
+# `openssl rand -hex 32`; anyone holding it can read bidders' emails and
+# photos, so treat it like the Stripe secret key.
+ADMIN_TOKEN=<long random hex>
 ```
 
 Register `https://api.oneaboveall.org/auth/google/callback` and
@@ -120,10 +131,20 @@ URIs with Google and Apple respectively before the first real sign-in —
 both currently point at `127.0.0.1` for local dev only.
 
 Register the live Stripe webhook endpoint
-(`https://api.oneaboveall.org/webhooks/stripe`, `payment_intent.succeeded`)
-in the Stripe dashboard and put its signing secret in
-`STRIPE_WEBHOOK_SECRET` above — it's different from the test-mode webhook
-secret already in `apps/api/.env.example`.
+(`https://api.oneaboveall.org/webhooks/stripe`) in the Stripe dashboard
+with **both** events enabled:
+
+- `payment_intent.amount_capturable_updated` — every bid is an
+  authorization hold (`capture_method: "manual"`); this event, fired when
+  the hold is placed, is what records the bid. **Without it no bid is ever
+  recorded** (bidders' cards get held, then nothing happens).
+- `payment_intent.succeeded` — still needed for PaymentIntents created
+  before holds existed; it also fires when the scheduler captures a winner
+  at the 4 PM ET close, which is a harmless no-op.
+
+Put the endpoint's signing secret in `STRIPE_WEBHOOK_SECRET` above — it's
+different from the test-mode webhook secret already in
+`apps/api/.env.example`.
 
 ### `infra/secrets/apple-private-key.p8`
 
@@ -203,20 +224,103 @@ the next round actually closes, the api logs
 (`kubectl logs -n oneaboveall deployment/oneaboveall-api`) should show no
 `scheduler: failed to reach web rebuild trigger` errors around that time.
 
-## Email (round-won / refund notifications)
+## Email (outbid / won notifications)
 
-Out of scope for this deploy: nothing in the codebase sends these emails
-yet — there's no hook wired into `installChampion.ts` or the refund path in
-`recordBid.ts`, and no `RESEND_API_KEY` is read anywhere. Decided during
-planning: when that feature is built, send through Resend
-(https://resend.com) rather than a full mailbox — these are outbound-only
-transactional emails, nothing needs to receive replies.
+The api sends two transactional emails through Resend (https://resend.com),
+see `apps/api/src/notifications/ResendNotifier.ts`: "You've been outbid"
+when a bidder loses the top spot, and "You won the seat" when the
+scheduler captures their hold at the close (asking for a photo if they
+haven't uploaded one). Configured by `RESEND_API_KEY` and `EMAIL_FROM`
+(default `oneaboveall <noreply@oneaboveall.org>`) in `prod.env`; links
+point at `PUBLIC_APP_URL`. With no `RESEND_API_KEY` the api logs one
+warning and skips every email — bidding and settlement are unaffected, and
+a failed send is only ever logged.
 
-To have the domain ready ahead of time: create a Resend account, add
-`oneaboveall.org` as a sending domain, and add the DNS records Resend gives
-you (SPF/DKIM TXT records) at the same registrar as the A records above.
-That's a DNS/account setup step now; the actual sending code is a separate,
-later piece of work.
+Before setting the key: in Resend, add `oneaboveall.org` as a sending
+domain and add the DNS records it gives you (SPF/DKIM TXT records) at the
+same registrar as the A records above — Resend rejects mail from an
+unverified domain.
+
+## Operator runbook
+
+Operator tooling is a small bearer-token API on the api host
+(`apps/api/src/routes/admin.ts`) — no admin UI. Every call needs
+`Authorization: Bearer $ADMIN_TOKEN`; with `ADMIN_TOKEN` unset in
+`prod.env` the routes don't exist (404). Set up a shell first:
+
+```bash
+export API=https://api.oneaboveall.org
+export ADMIN_TOKEN=...   # same value as in infra/secrets/prod.env
+alias admin='curl -sS -H "Authorization: Bearer $ADMIN_TOKEN"'
+```
+
+**Streamer stats** — visits, sign-ups, distinct bidders, distinct winners
+and captured revenue (cents) per `ref` code, plus totals for everyone
+(attributed or not). Give each streamer their own link,
+`https://oneaboveall.org/?ref=<code>` (letters, digits, `_ . -`, up to 64
+chars; utm_* tags work too). The first link someone arrives through gets
+the credit, permanently.
+
+```bash
+admin "$API/admin/stats" | jq
+```
+
+Treat `visits` as approximate — a traffic signal, not an audit figure.
+`POST /ref-visits` is public, so the API throttles it in memory per client
+IP (`apps/api/src/routes/refVisitLimiter.ts`): one counted visit per IP per
+ref per 30 minutes and at most ~30 counted requests per IP per hour. Many
+people behind one NAT (a campus, a mobile carrier) can count as fewer
+visits; an API restart resets the throttle, so a few repeats can count
+twice. Sign-ups, bidders, winners and revenue are exact.
+
+**Current round** — the champion, the leader and the runner-up (the two
+card holds still alive), each with user id, name, email, amount, whether
+the hold was captured, whether a photo is on file, social link, character
+request and the sponsored flag:
+
+```bash
+admin "$API/admin/round" | jq
+```
+
+**Fetching the winner's photo** (to compose the scene art). Raw photos
+are no longer public — `GET /photos/:id` only serves a user their own.
+After the 4 PM ET close the winner is the `leader` with `"captured": true`;
+once installed (~7 PM ET) they are the `champion`.
+
+```bash
+USER_ID=$(admin "$API/admin/round" | jq -r '.leader.userId')   # or .champion.userId
+admin -o "winner-$USER_ID.jpg" "$API/admin/photos/$USER_ID"
+```
+
+(The file keeps its uploaded format — check with `file winner-*.jpg`;
+JPEG, PNG or WebP.)
+
+**Marking a sponsored creator** — anyone whose seat we paid for or
+arranged must be labelled; it shows as "Sponsored" next to their name on
+the homepage, hover card, leaderboard and overlay:
+
+```bash
+admin -X PATCH -H 'content-type: application/json' \
+  -d '{"sponsored": true}' "$API/admin/users/$USER_ID"
+```
+
+**Moderation** — clear a bad social link and/or photo, or replace an
+offensive display name (any combination in one call). A cleared photo is
+deleted from disk too. The public scene only changes on the next static
+rebuild (next champion install) — if the bad content is already in the
+composed `scene.jpg`, re-render the art too.
+
+```bash
+admin -X PATCH -H 'content-type: application/json' \
+  -d '{"clearSocialUrl": true, "clearPhoto": true, "name": "Seat holder"}' \
+  "$API/admin/users/$USER_ID"
+```
+
+**Stream overlay for streamers** — give them
+`https://oneaboveall.org/overlay?compact=1` as an OBS **Browser Source**,
+400×220 (drop `?compact=1` and use ~400×320 to include the live bid feed).
+It's transparent, polls the public `/current-round` every 5 s, and its
+loads never count as visits.
 
 ## Troubleshooting
 

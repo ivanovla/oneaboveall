@@ -1,0 +1,42 @@
+---
+// OBS overlay for streamers: give them
+//   https://oneaboveall.org/overlay?compact=1
+// as an OBS "Browser Source" (400×220). Shows the champion, the live price,
+// who's leading, the countdown to the 4 PM ET close and (without
+// ?compact=1) the last few bids — see components/OverlayPanel.tsx.
+//
+// Deliberately NOT included here: the site footer, the scene, and
+// AttributionTracker — OBS reloads this page for every stream, and those
+// loads must never count as streamer-referred visits.
+import BaseLayout from "../layouts/BaseLayout.astro";
+import OverlayPanel from "../components/OverlayPanel";
+
+// Browser-facing API origin — same as index.astro's publicApiBaseUrl.
+const publicApiBaseUrl = import.meta.env.PUBLIC_API_BASE_URL ?? "http://127.0.0.1:3001";
+---
+<BaseLayout title="oneaboveall — stream overlay" description="Live seat price and leader for stream overlays.">
+  <meta slot="head" name="robots" content="noindex, nofollow" />
+  <!--
+    OBS composites a Browser Source over the stream using the page's own
+    alpha, so everything but the panel must be see-through. tokens.css paints
+    html/body with the site's dark background; override it for this page
+    only. is:inline so it's emitted verbatim (and after tokens.css) instead
+    of being scoped/bundled.
+  -->
+  <style slot="head" is:inline>
+    html,
+    body {
+      background: transparent !important;
+      overflow: hidden;
+    }
+    body {
+      padding: 8px;
+    }
+  </style>
+  <!--
+    client:load (not idle): an OBS source should show live data as soon as
+    possible. The server-rendered frame is just the "Loading…" panel, which
+    never reads the clock or the URL, so hydration always matches.
+  -->
+  <OverlayPanel client:load apiBaseUrl={publicApiBaseUrl} />
+</BaseLayout>

@@ -1,15 +1,14 @@
-import { and, eq } from "drizzle-orm";
+import { and, asc, desc, eq, isNotNull, isNull, lte } from "drizzle-orm";
 import { db } from "../db/client";
-import { rounds } from "../db/schema";
-import { getQueueLeader } from "../db/repository";
+import { bids, rounds } from "../db/schema";
 import { installChampion } from "./installChampion";
 
-// Closes a round's bidding window and, if it had a leader, installs them as
-// champion on the spot — the winner already paid the full amount when they
-// placed their bid, so there is nothing left to charge or offer, and no one
-// else is ever owed a refund at this point (every bid that wasn't the
-// round's final leader was already refunded, synchronously, the moment it
-// got outbid — see recordBid.ts).
+// Closes a round and, if settlement (settlement.ts, run by the scheduler at
+// the daily close) collected a winner, installs them as champion. Only a
+// *captured* bid can be installed: an uncaptured hold is not money we have,
+// so a round whose settlement never captured anything closes empty — the
+// reigning champion stays — exactly like a round nobody bid in. Every other
+// hold in the round was already released by settlement.
 export async function resolveBiddingPhaseSnapshot(
   roundId: string,
   // The instant the bidding window closed on the ideal schedule grid
@@ -37,10 +36,22 @@ export async function resolveBiddingPhaseSnapshot(
     return { outcome: "already-resolving" };
   }
 
-  // asOf pins the queue to the bidding window: a bid placed after the window
-  // closed can never win the snapshot, even if it somehow slipped past the
-  // route's window guard.
-  const leader = await getQueueLeader(roundId, snapshotAt);
+  // The placedAt bound pins the winner to the bidding window: a bid placed
+  // after the window closed can never win the snapshot, even if it somehow
+  // slipped past the late-webhook guard.
+  const [leader] = await db
+    .select()
+    .from(bids)
+    .where(
+      and(
+        eq(bids.roundId, roundId),
+        isNotNull(bids.capturedAt),
+        isNull(bids.refundedAt),
+        lte(bids.placedAt, snapshotAt),
+      ),
+    )
+    .orderBy(desc(bids.amountCents), asc(bids.placedAt))
+    .limit(1);
   if (!leader) {
     return { outcome: "empty-closed" };
   }

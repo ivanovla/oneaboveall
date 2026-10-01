@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { buildServer } from "../src/server";
+import { FakePaymentProvider } from "engine/payments/FakePaymentProvider";
 
 // vi.mock factories are hoisted above every top-level statement — including
 // the `import { buildServer } from "../src/server"` above, which transitively
@@ -91,7 +92,9 @@ describe("POST /webhooks/stripe", () => {
       data: {
         object: {
           id: "pi_1",
+          status: "succeeded",
           amount: 11_000,
+          currency: "usd",
           metadata: { kind: "bid", roundId: "round-1", bidderId: "challenger", amountCents: "11000" },
         },
       },
@@ -108,9 +111,159 @@ describe("POST /webhooks/stripe", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ received: true });
     expect(recordBidMock).toHaveBeenCalledWith(
-      { roundId: "round-1", bidderId: "challenger", amountCents: 11_000, paymentRef: "pi_1", now: expect.any(Date) },
+      { roundId: "round-1", bidderId: "challenger", amountCents: 11_000, paymentRef: "pi_1", now: expect.any(Date), placedAt: expect.any(Date) },
+      expect.anything(),
       expect.anything(),
     );
+  });
+
+  // The event a manual-capture PaymentIntent fires once the hold is in
+  // place — the one that actually records every new bid. `succeeded` above
+  // stays handled for PaymentIntents created before holds existed, and for
+  // the event our own capture fires (a no-op: already recorded).
+  it("calls recordBid the same way on payment_intent.amount_capturable_updated", async () => {
+    constructEvent.mockReturnValueOnce({
+      type: "payment_intent.amount_capturable_updated",
+      data: {
+        object: {
+          id: "pi_hold",
+          status: "requires_capture",
+          amount: 11_000,
+          amount_capturable: 11_000,
+          currency: "usd",
+          metadata: { kind: "bid", roundId: "round-1", bidderId: "challenger", amountCents: "11000" },
+        },
+      },
+    });
+
+    const app = buildServer();
+    const response = await app.inject({
+      method: "POST",
+      url: "/webhooks/stripe",
+      headers: { "stripe-signature": "valid" },
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(recordBidMock).toHaveBeenCalledWith(
+      { roundId: "round-1", bidderId: "challenger", amountCents: 11_000, paymentRef: "pi_hold", now: expect.any(Date), placedAt: expect.any(Date) },
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("passes the Stripe-signed event.created as the bid's placedAt, so a hold authorized just before the close still counts", async () => {
+    const created = 1_767_301_198; // seconds, as Stripe sends it
+    constructEvent.mockReturnValueOnce({
+      type: "payment_intent.amount_capturable_updated",
+      created,
+      data: {
+        object: {
+          id: "pi_hold",
+          status: "requires_capture",
+          amount: 11_000,
+          currency: "usd",
+          metadata: { kind: "bid", roundId: "round-1", bidderId: "challenger", amountCents: "11000" },
+        },
+      },
+    });
+
+    const app = buildServer();
+    const response = await app.inject({ method: "POST", url: "/webhooks/stripe", headers: { "stripe-signature": "valid" }, payload: {} });
+
+    expect(response.statusCode).toBe(200);
+    expect(recordBidMock).toHaveBeenCalledWith(
+      expect.objectContaining({ paymentRef: "pi_hold", placedAt: new Date(created * 1000), now: expect.any(Date) }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  // The metadata is ours (written by POST /bids), but what Stripe actually
+  // holds or collected is intent.amount / intent.currency / intent.status —
+  // a bid is only recorded when all three back up what the metadata claims.
+  describe("only records a bid Stripe actually secured, for the amount and currency it claims", () => {
+    function bidIntent(overrides: Record<string, unknown>) {
+      return {
+        type: "payment_intent.amount_capturable_updated",
+        created: 1_767_301_198,
+        data: {
+          object: {
+            id: "pi_x",
+            status: "requires_capture",
+            amount: 11_000,
+            currency: "usd",
+            metadata: { kind: "bid", roundId: "round-1", bidderId: "challenger", amountCents: "11000" },
+            ...overrides,
+          },
+        },
+      };
+    }
+
+    async function deliver(event: unknown, provider = new FakePaymentProvider()) {
+      constructEvent.mockReturnValueOnce(event);
+      const app = buildServer({ provider });
+      const response = await app.inject({ method: "POST", url: "/webhooks/stripe", headers: { "stripe-signature": "valid" }, payload: {} });
+      return { response, provider };
+    }
+
+    it("ignores a held PaymentIntent whose amount differs from the bid's amountCents, and releases the hold", async () => {
+      const { response, provider } = await deliver(bidIntent({ amount: 100 }));
+
+      expect(response.statusCode).toBe(200);
+      expect(recordBidMock).not.toHaveBeenCalled();
+      expect(provider.releases).toEqual(["pi_x"]);
+    });
+
+    it("ignores a held PaymentIntent in a different currency, and releases the hold", async () => {
+      const { response, provider } = await deliver(bidIntent({ currency: "eur" }));
+
+      expect(response.statusCode).toBe(200);
+      expect(recordBidMock).not.toHaveBeenCalled();
+      expect(provider.releases).toEqual(["pi_x"]);
+    });
+
+    it("ignores a succeeded PaymentIntent with a mismatched amount without trying to release it", async () => {
+      const { response, provider } = await deliver({ ...bidIntent({ status: "succeeded", amount: 100 }), type: "payment_intent.succeeded" });
+
+      expect(response.statusCode).toBe(200);
+      expect(recordBidMock).not.toHaveBeenCalled();
+      expect(provider.releases).toEqual([]);
+    });
+
+    it("ignores a PaymentIntent that is neither held nor succeeded", async () => {
+      const { response, provider } = await deliver(bidIntent({ status: "requires_payment_method" }));
+
+      expect(response.statusCode).toBe(200);
+      expect(recordBidMock).not.toHaveBeenCalled();
+      expect(provider.releases).toEqual([]);
+    });
+
+    it("records a held PaymentIntent whose amount and currency match", async () => {
+      const { response, provider } = await deliver(bidIntent({}));
+
+      expect(response.statusCode).toBe(200);
+      expect(recordBidMock).toHaveBeenCalledTimes(1);
+      expect(provider.releases).toEqual([]);
+    });
+  });
+
+  it("does not call recordBid for an amount_capturable_updated PaymentIntent without the kind=bid marker", async () => {
+    constructEvent.mockReturnValueOnce({
+      type: "payment_intent.amount_capturable_updated",
+      data: { object: { id: "pi_other", amount: 5_000, metadata: { roundId: "round-1" } } },
+    });
+
+    const app = buildServer();
+    const response = await app.inject({
+      method: "POST",
+      url: "/webhooks/stripe",
+      headers: { "stripe-signature": "valid" },
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(recordBidMock).not.toHaveBeenCalled();
   });
 
   it("does not call recordBid for a succeeded PaymentIntent that carries no bid metadata", async () => {
@@ -152,7 +305,9 @@ describe("POST /webhooks/stripe", () => {
       data: {
         object: {
           id: "pi_3",
+          status: "succeeded",
           amount: 11_000,
+          currency: "usd",
           metadata: { kind: "bid", roundId: "round-1", bidderId: "challenger", amountCents: "11000" },
         },
       },

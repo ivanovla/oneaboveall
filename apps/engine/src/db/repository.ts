@@ -2,6 +2,7 @@ import { and, desc, asc, eq, lte, isNull, sql } from "drizzle-orm";
 import { db } from "./client";
 import { reigns, rounds, bids, pageViews } from "./schema";
 import { validateBidAmount } from "../domain/bidValidation";
+import { nextDailyCloseAt } from "../domain/dailyClose";
 
 export type Reign = typeof reigns.$inferSelect;
 export type Round = typeof rounds.$inferSelect;
@@ -26,9 +27,9 @@ export async function getQueueLeader(roundId: string, asOf?: Date): Promise<Bid 
   // `asOf` (optional, no time filter by default) restricts the queue to bids
   // placed at or before that instant. The bidding-phase snapshot passes the
   // window's close time so that a bid which somehow slipped past the window
-  // guard can never win the snapshot. A refunded (outbid) bid is never a
-  // candidate leader — only the one still-unrefunded bid in a round (if any)
-  // can be.
+  // guard can never win the snapshot. A released bid (refundedAt set —
+  // outbid past the runner-up slot, or its capture failed) is never a
+  // candidate leader; the top of whatever is still held is.
   const where = asOf
     ? and(eq(bids.roundId, roundId), isNull(bids.refundedAt), lte(bids.placedAt, asOf))
     : and(eq(bids.roundId, roundId), isNull(bids.refundedAt));
@@ -43,7 +44,7 @@ export async function getQueueLeader(roundId: string, asOf?: Date): Promise<Bid 
 
 // This bidder's own highest bid in the round, independent of who's
 // currently leading (and regardless of whether it was later outbid and
-// refunded). Used to distinguish "never bid" from "bid but got outbid".
+// released). Used to distinguish "never bid" from "bid but got outbid".
 export async function getBidderTopBid(roundId: string, bidderId: string): Promise<Bid | null> {
   const [top] = await db
     .select()
@@ -62,10 +63,12 @@ export type BidderHistoryEntry = {
 // Every round this bidder ever placed a bid in, most recent bid first, each
 // with all of their own bids in that round (not the round's overall leader —
 // this is a personal activity history, not a leaderboard). A bid's own
-// status tells the outcome directly: "refunded" means a later bid (by
-// someone else) outbid it and the money already came back; "active" means
-// it's still the unrefunded leader of a round still in progress; "won" means
-// it's still unrefunded and the round has closed — i.e. it's the winning bid.
+// status tells the outcome directly: "refunded" (shown as "Released") means
+// its hold was dropped — it was outbid, or its capture failed — and the
+// bidder owes nothing for it; "won" means settlement captured it, or it is
+// still held in a round that has closed (a bid from before holds existed,
+// whose charge was collected up front); "active" means it's still held in a
+// round still in progress (the leader, or the runner-up kept as fallback).
 //
 // One query per round rather than a single joined query — deliberately: a
 // bidder's total round count is small (rounds are ~daily), so the join's
@@ -88,7 +91,7 @@ export async function getBidderHistory(bidderId: string): Promise<BidderHistoryE
   for (const bid of ownBids) {
     const status: "active" | "won" | "refunded" = bid.refundedAt
       ? "refunded"
-      : roundPhaseById.get(bid.roundId) === "closed"
+      : bid.capturedAt || roundPhaseById.get(bid.roundId) === "closed"
         ? "won"
         : "active";
     const entry = entriesByRound.get(bid.roundId) ?? { roundId: bid.roundId, bids: [] };
@@ -104,13 +107,14 @@ export async function getBidderHistory(bidderId: string): Promise<BidderHistoryE
 const SERIALIZATION_FAILURE = "40001";
 const UNIQUE_VIOLATION = "23505";
 
-// The authoritative post-payment record of a bid: this bidder's Stripe charge
-// for the full amount already succeeded (that's why this function is being
-// called at all — from the payment_intent.succeeded webhook), so what's left
-// is purely bookkeeping: verify the round will still accept it, verify it
-// still beats the current leader, and if a previous leader is displaced,
-// report who so the caller can refund them (refunding is an external side
-// effect the caller performs — this function's own job is limited to the DB
+// The authoritative record of a bid: this bidder's Stripe hold for the full
+// amount is already in place (that's why this function is being called at
+// all — from the payment_intent.amount_capturable_updated / .succeeded
+// webhook), so what's left is purely bookkeeping: verify the round will
+// still accept it, verify it still beats the current leader, and if a
+// previous leader is displaced, report who so the caller can notify them
+// and release whatever holds are no longer needed (external side effects the
+// caller performs — this function's own job is limited to the DB
 // transaction).
 export async function recordBidAtomic(params: {
   roundId: string;
@@ -135,6 +139,18 @@ export async function recordBidAtomic(params: {
           const [round] = await tx.select().from(rounds).where(eq(rounds.id, params.roundId)).limit(1);
           if (!round) return { outcome: "rejected" as const, reason: "Round not found." };
           if (round.phase !== "bidding") return { outcome: "rejected" as const, reason: "Round is not accepting bids." };
+          // Phase alone is not enough: a round stays "bidding" until the
+          // scheduler resolves it — through the whole champion-processing gap
+          // after the daily close — so without this a webhook that lands
+          // after 4pm ET (a slow 3-D Secure confirmation, a Stripe retry)
+          // would displace the true winner after the fact. The bid's own
+          // placedAt is when Stripe secured the hold — the signed event's
+          // timestamp, not the webhook's arrival (see recordBid.ts) — so a
+          // slow delivery of a hold made in time doesn't count against it.
+          const placedAt = params.placedAt ?? new Date();
+          if (placedAt.getTime() >= nextDailyCloseAt(round.startsAt).getTime()) {
+            return { outcome: "rejected" as const, reason: "Bidding for this round has closed." };
+          }
 
           const [reign] = await tx.select().from(reigns).where(eq(reigns.id, round.reignId)).limit(1);
           if (!reign) return { outcome: "rejected" as const, reason: "Reign not found." };

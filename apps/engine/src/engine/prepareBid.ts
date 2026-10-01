@@ -7,18 +7,18 @@ import { nextDailyCloseAt } from "../domain/dailyClose";
 // can be well after the round's actual close time. Phase alone is not
 // authoritative for whether the round is actually still open.
 // Exported so the HTTP bid route can apply the same window test *before*
-// creating a PaymentIntent — otherwise every click on a stale page charges a
-// bidder for a bid that just gets refunded a moment later, turning the
-// race-refund path into the normal path.
+// creating a PaymentIntent — otherwise every click on a stale page puts a
+// hold on a bidder's card for a bid that just gets released a moment later,
+// turning the race-release path into the normal path.
 export function isBiddingOpen(round: { phase: string; startsAt: Date }, now: Date): boolean {
   if (round.phase !== "bidding") return false;
   const biddingClosesAt = nextDailyCloseAt(round.startsAt).getTime();
   return round.startsAt.getTime() <= now.getTime() && now.getTime() < biddingClosesAt;
 }
 
-// A fast, pre-charge sanity check the API route runs before creating a
+// A fast, pre-authorization sanity check the API route runs before creating a
 // PaymentIntent for a bid. Not authoritative — the real check happens inside
-// recordBidAtomic once the charge has actually succeeded (state can change
+// recordBidAtomic once the hold is actually in place (state can change
 // between this check and that one) — this only exists so an obviously
 // doomed bid (stale page, already outbid, already leading) never reaches
 // Stripe at all.

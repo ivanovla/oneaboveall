@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import { db, pool } from "../../src/db/client";
 import { reigns, rounds, bids } from "../../src/db/schema";
 import { recordBidAtomic } from "../../src/db/repository";
+import { nextDailyCloseAt } from "../../src/domain/dailyClose";
 
 afterEach(async () => {
   await db.delete(bids);
@@ -99,5 +100,27 @@ describe("recordBidAtomic", () => {
     const recordedCount = [r1, r2].filter((r) => r.outcome === "recorded").length;
     expect(recordedCount).toBe(1);
     expect(retryCount).toBeGreaterThanOrEqual(1);
+  });
+
+  // The phase stays "bidding" through the whole champion-processing gap
+  // (until the scheduler finally resolves the round), so phase alone would
+  // let a webhook that lands after 4pm ET displace the true winner.
+  it("rejects a bid placed at or after the round's daily close even while the phase is still bidding", async () => {
+    const startsAt = new Date(2026, 0, 1, 0, 0, 0);
+    const [reign] = await db.insert(reigns).values({ occupantId: "champ", priceCents: 10_000, startedAt: startsAt }).returning();
+    const [round] = await db.insert(rounds).values({ reignId: reign.id, startsAt, phase: "bidding" }).returning();
+    const closeAt = nextDailyCloseAt(startsAt);
+
+    const atClose = await recordBidAtomic({ roundId: round.id, bidderId: "a", amountCents: 11_000, paymentRef: "pi_1", placedAt: closeAt });
+    expect(atClose.outcome).toBe("rejected");
+
+    const justBefore = await recordBidAtomic({
+      roundId: round.id,
+      bidderId: "a",
+      amountCents: 11_000,
+      paymentRef: "pi_2",
+      placedAt: new Date(closeAt.getTime() - 1),
+    });
+    expect(justBefore.outcome).toBe("recorded");
   });
 });

@@ -204,3 +204,17 @@ describe("adaptLeaderboardRow", () => {
     );
   });
 });
+
+describe("sponsored flag", () => {
+  it("carries sponsored through for champion, retinue and leaderboard rows, false when absent", () => {
+    const scene = adaptScene({
+      champion: { occupantId: "c", occupantName: "C", priceCents: 1, since: "2026-08-09T10:20:00.000Z", sponsored: true },
+      retinue: [{ occupantId: "r", occupantName: "R", priceCents: 1, startedAt: "2026-08-08T00:00:00.000Z", endedAt: "2026-08-09T00:00:00.000Z" }],
+    })!;
+    expect(scene.champion.sponsored).toBe(true);
+    expect(scene.retinue[0].sponsored).toBe(false);
+
+    expect(adaptLeaderboardRow({ occupantId: "x", rounds: 1, totalSpentCents: 1, totalDurationMs: 1, sponsored: true }).sponsored).toBe(true);
+    expect(adaptLeaderboardRow({ occupantId: "y", rounds: 1, totalSpentCents: 1, totalDurationMs: 1 }).sponsored).toBe(false);
+  });
+});

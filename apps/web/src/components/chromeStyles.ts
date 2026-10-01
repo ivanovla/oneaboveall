@@ -14,3 +14,19 @@ export const chromeButtonStyle: CSSProperties = {
   background: "var(--scene-chip)",
   backdropFilter: "blur(8px)",
 };
+
+// The small "Sponsored" disclosure next to an operator-flagged creator's
+// name (users.sponsored) — homepage leader line, leaderboard, OBS overlay.
+// Same look as the scene hover card's "Sponsored creator" tag
+// (Scene.astro's .scene__tip-sponsored), so it reads as one label.
+export const sponsoredTagStyle: CSSProperties = {
+  display: "inline-block",
+  marginLeft: 8,
+  padding: "1px 6px",
+  border: "1px solid var(--gold-soft)",
+  fontSize: 8,
+  letterSpacing: ".16em",
+  textTransform: "uppercase",
+  color: "var(--gold)",
+  verticalAlign: "middle",
+};

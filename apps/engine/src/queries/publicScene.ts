@@ -1,6 +1,6 @@
-import { desc, isNotNull, isNull, sql } from "drizzle-orm";
+import { desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { db } from "../db/client";
-import { reigns, users } from "../db/schema";
+import { bids, reigns, users } from "../db/schema";
 import { getCurrentReign, getLatestRound, getQueueLeader } from "../db/repository";
 import { nextDailyCloseAt } from "../domain/dailyClose";
 
@@ -39,6 +39,26 @@ function displayName(occupantId: string, name: string | null): string {
   return name && name.trim() !== "" ? name : occupantId;
 }
 
+// Same cast reasoning as occupantIsUser above, for bids.bidder_id (also
+// plain text, also a users.id in practice, also arbitrary strings in tests).
+const bidderIsUser = sql`${users.id}::text = ${bids.bidderId}`;
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Stricter sibling of `displayName` for /current-round — the busiest,
+ * publicly cached route, also polled by the OBS overlay and therefore shown
+ * on streams. `displayName`'s raw-id fallback is fine for a hand-typed
+ * bootstrap id like "champ", but for a real user with an empty name it would
+ * put their `users.id` on screen, and a bidder's id has never been public
+ * before (it's what /rounds/:id/me and the admin API key on). So a
+ * UUID-shaped id is never echoed: it becomes "Anonymous" instead.
+ */
+function publicName(id: string, name: string | null): string {
+  if (name && name.trim() !== "") return name;
+  return UUID_RE.test(id) ? "Anonymous" : id;
+}
+
 export async function getScene(_now: Date) {
   const [champion] = await db
     .select({
@@ -47,6 +67,7 @@ export async function getScene(_now: Date) {
       priceCents: reigns.priceCents,
       startedAt: reigns.startedAt,
       socialUrl: users.socialUrl,
+      sponsored: users.sponsored,
     })
     .from(reigns)
     .leftJoin(users, occupantIsUser)
@@ -61,6 +82,7 @@ export async function getScene(_now: Date) {
       startedAt: reigns.startedAt,
       endedAt: reigns.endedAt,
       socialUrl: users.socialUrl,
+      sponsored: users.sponsored,
     })
     .from(reigns)
     .leftJoin(users, occupantIsUser)
@@ -76,6 +98,8 @@ export async function getScene(_now: Date) {
           priceCents: champion.priceCents,
           since: champion.startedAt,
           socialUrl: champion.socialUrl,
+          // LEFT JOIN: a non-user occupant has no row, so null → false.
+          sponsored: champion.sponsored === true,
         }
       : null,
     retinue: retinueRows.map((r) => ({
@@ -85,6 +109,7 @@ export async function getScene(_now: Date) {
       startedAt: r.startedAt,
       endedAt: r.endedAt!,
       socialUrl: r.socialUrl,
+      sponsored: r.sponsored === true,
     })),
   };
 }
@@ -97,6 +122,7 @@ export async function getLeaderboard() {
       priceCents: reigns.priceCents,
       startedAt: reigns.startedAt,
       endedAt: reigns.endedAt,
+      sponsored: users.sponsored,
     })
     .from(reigns)
     .leftJoin(users, occupantIsUser)
@@ -104,12 +130,18 @@ export async function getLeaderboard() {
 
   const byOccupant = new Map<
     string,
-    { occupantName: string; rounds: number; totalSpentCents: number; totalDurationMs: number }
+    { occupantName: string; sponsored: boolean; rounds: number; totalSpentCents: number; totalDurationMs: number }
   >();
   for (const r of ended) {
     const entry =
       byOccupant.get(r.occupantId) ??
-      { occupantName: displayName(r.occupantId, r.occupantName), rounds: 0, totalSpentCents: 0, totalDurationMs: 0 };
+      {
+        occupantName: displayName(r.occupantId, r.occupantName),
+        sponsored: r.sponsored === true,
+        rounds: 0,
+        totalSpentCents: 0,
+        totalDurationMs: 0,
+      };
     entry.rounds += 1;
     entry.totalSpentCents += r.priceCents;
     entry.totalDurationMs += r.endedAt!.getTime() - r.startedAt.getTime();
@@ -121,11 +153,46 @@ export async function getLeaderboard() {
     .sort((a, b) => b.totalDurationMs - a.totalDurationMs);
 }
 
+export type PublicPerson = { name: string; sponsored: boolean };
+export type PublicRecentBid = { name: string; amountCents: number; placedAt: Date };
+
+// How many of the round's latest bids /current-round lists — the homepage
+// and OBS overlay's "live feed". Small on purpose: this payload is polled
+// by every open tab.
+const RECENT_BIDS_LIMIT = 5;
+
+async function getUserPublicPerson(id: string): Promise<PublicPerson> {
+  // Compared as text (see occupantIsUser) so a non-UUID id simply finds no
+  // user instead of raising a cast error.
+  const [row] = await db
+    .select({ name: users.name, sponsored: users.sponsored })
+    .from(users)
+    .where(sql`${users.id}::text = ${id}`)
+    .limit(1);
+  return { name: publicName(id, row?.name ?? null), sponsored: row?.sponsored === true };
+}
+
+/**
+ * Everything the homepage chrome and the OBS overlay poll for — and,
+ * because /current-round is cached in-process and served `public` to any
+ * CDN, deliberately identical for every caller: nothing here may depend on
+ * who is asking, and nothing here may identify a bidder beyond the display
+ * name they chose to show publicly (no user ids, no emails).
+ *
+ * `leader` is the top *unreleased* bid's bidder (the same bid
+ * currentLeaderCents comes from), null when nobody has bid this round.
+ * `recentBids` is the round's last few bids newest first, released ones
+ * included — being outbid is the drama — so it can name someone who is no
+ * longer leading.
+ */
 export async function getCurrentRoundInfo(_now: Date): Promise<{
   roundId: string;
   phase: "bidding" | "closed";
   currentLeaderCents: number;
   biddingClosesAt: Date;
+  leader: PublicPerson | null;
+  champion: PublicPerson | null;
+  recentBids: PublicRecentBid[];
 } | null> {
   const reign = await getCurrentReign();
   if (!reign) return null;
@@ -135,10 +202,28 @@ export async function getCurrentRoundInfo(_now: Date): Promise<{
 
   const topBid = await getQueueLeader(round.id);
 
+  const recentRows = await db
+    .select({ bidderId: bids.bidderId, name: users.name, amountCents: bids.amountCents, placedAt: bids.placedAt })
+    .from(bids)
+    .leftJoin(users, bidderIsUser)
+    .where(eq(bids.roundId, round.id))
+    .orderBy(desc(bids.placedAt))
+    .limit(RECENT_BIDS_LIMIT);
+
   return {
     roundId: round.id,
     phase: round.phase,
     currentLeaderCents: topBid ? topBid.amountCents : reign.priceCents,
     biddingClosesAt: nextDailyCloseAt(round.startsAt),
+    leader: topBid ? await getUserPublicPerson(topBid.bidderId) : null,
+    champion: await getUserPublicPerson(reign.occupantId),
+    // A bid always has a bidder, but "Anonymous" (not the id) for one whose
+    // name is empty — same rule as publicName, applied unconditionally
+    // since a bidder id is never meant to be public.
+    recentBids: recentRows.map((r) => ({
+      name: r.name && r.name.trim() !== "" ? r.name : "Anonymous",
+      amountCents: r.amountCents,
+      placedAt: r.placedAt,
+    })),
   };
 }

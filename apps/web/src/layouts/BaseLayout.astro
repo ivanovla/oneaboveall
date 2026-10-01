@@ -1,10 +1,22 @@
 ---
 import "../styles/tokens.css";
 
+const SITE_ORIGIN = "https://oneaboveall.org";
+const DEFAULT_DESCRIPTION =
+  "One page. One crowd. One above all. Outbid the person in the center and take their seat — you pay only if you win.";
+
 interface Props {
   title: string;
+  /** Meta / Open Graph / Twitter description. Falls back to the site tagline. */
+  description?: string;
+  /** Path (or absolute URL) of the link-preview image; must be 1200×630. */
+  image?: string;
 }
-const { title } = Astro.props;
+const { title, description = DEFAULT_DESCRIPTION, image = "/og.jpg" } = Astro.props;
+// Link-preview crawlers need absolute URLs, and always the public origin —
+// never whatever host the static build happened to run on.
+const canonicalUrl = new URL(Astro.url.pathname, SITE_ORIGIN).href;
+const imageUrl = new URL(image, SITE_ORIGIN).href;
 ---
 <!doctype html>
 <html lang="en">
@@ -12,6 +24,24 @@ const { title } = Astro.props;
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonicalUrl} />
+    <meta name="theme-color" content="#070603" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="oneaboveall" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonicalUrl} />
+    <meta property="og:image" content={imageUrl} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={imageUrl} />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -34,6 +64,8 @@ const { title } = Astro.props;
         /* storage unavailable — fall back to the default dark theme */
       }
     </script>
+    <!-- Page-specific head tags (e.g. /overlay's noindex and transparent body). -->
+    <slot name="head" />
   </head>
   <body>
     <slot />

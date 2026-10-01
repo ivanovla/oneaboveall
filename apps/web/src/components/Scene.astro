@@ -96,6 +96,7 @@ const hotspots = people.map((person, i) => {
     heldLabel: person.heldLabel,
     paid: formatMoney(person.priceCents),
     socialUrl: person.socialUrl ?? "",
+    sponsored: person.sponsored === true,
   };
 });
 ---
@@ -121,6 +122,7 @@ const hotspots = people.map((person, i) => {
             data-held-label={h.heldLabel}
             data-paid={h.paid}
             data-social={h.socialUrl}
+            data-sponsored={h.sponsored ? "true" : "false"}
             data-tooltip-left={h.tooltipLeft}
             data-tooltip-top={h.tooltipTop}
           />
@@ -133,6 +135,11 @@ const hotspots = people.map((person, i) => {
         <div class="scene__tip-name" id="scene-tip-name"></div>
         <div class="scene__tip-rank" id="scene-tip-rank"></div>
       </div>
+      <!--
+        Disclosure for an operator-flagged sponsored creator (users.sponsored)
+        — a paid/arranged placement must never pass for an organic bid.
+      -->
+      <div class="scene__tip-sponsored" id="scene-tip-sponsored" hidden>Sponsored creator</div>
       <div class="scene__tip-period" id="scene-tip-period"></div>
       <div class="scene__tip-stats">
         <div>
@@ -149,9 +156,15 @@ const hotspots = people.map((person, i) => {
         the occupant's URL passes the http(s) check, so an unvalidated or
         missing link is inert rather than pointing anywhere.
       -->
+      <!--
+        rel: the link is user-supplied (ugc) and must not pass this site's
+        search ranking to whatever a bidder links (nofollow) — otherwise
+        buying the seat doubles as buying a backlink — nor get a handle on
+        this window or learn the referrer (noopener noreferrer).
+      -->
       <a
         target="_blank"
-        rel="noopener noreferrer"
+        rel="nofollow ugc noopener noreferrer"
         class="scene__tip-link"
         id="scene-tip-link"
         style="display: none"
@@ -274,6 +287,21 @@ const hotspots = people.map((person, i) => {
     white-space: nowrap;
   }
 
+  .scene__tip-sponsored {
+    display: inline-block;
+    margin-top: 8px;
+    padding: 2px 7px;
+    border: 1px solid var(--gold-soft);
+    font-size: 9px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--gold);
+  }
+
+  .scene__tip-sponsored[hidden] {
+    display: none;
+  }
+
   .scene__tip-period {
     margin-top: 8px;
     font-size: 12px;
@@ -362,6 +390,7 @@ const hotspots = people.map((person, i) => {
     const nameEl = tip.querySelector<HTMLElement>("#scene-tip-name")!;
     const rankEl = tip.querySelector<HTMLElement>("#scene-tip-rank")!;
     const periodEl = tip.querySelector<HTMLElement>("#scene-tip-period")!;
+    const sponsoredEl = tip.querySelector<HTMLElement>("#scene-tip-sponsored")!;
     const heldEl = tip.querySelector<HTMLElement>("#scene-tip-held")!;
     const paidEl = tip.querySelector<HTMLElement>("#scene-tip-paid")!;
     const linkEl = tip.querySelector<HTMLAnchorElement>("#scene-tip-link")!;
@@ -379,6 +408,7 @@ const hotspots = people.map((person, i) => {
       nameEl.textContent = data.name ?? "";
       rankEl.textContent = data.rank ?? "";
       periodEl.textContent = data.period ?? "";
+      sponsoredEl.hidden = data.sponsored !== "true";
       heldEl.textContent =
         data.isChampion === "true"
           ? formatHeldDuration(data.heldBaseMs ?? "0")

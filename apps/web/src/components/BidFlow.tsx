@@ -58,6 +58,26 @@ const inputStyle: React.CSSProperties = {
   outline: "none",
 };
 
+const linkButtonStyle: React.CSSProperties = {
+  padding: 0,
+  fontSize: "inherit",
+  color: "var(--gold)",
+  textDecoration: "underline",
+  textUnderlineOffset: 2,
+};
+
+// Same limit PATCH /auth/name enforces (apps/api/src/routes/authMe.ts).
+const MAX_NAME_LENGTH = 80;
+
+// What a confirmed payment actually means at this point: the card is
+// authorized (a hold), not charged. "Your payment went through" would be
+// wrong twice over — nothing is collected until the bid wins at the close,
+// and a hold whose bid didn't land in time (outbid in a race, or the close
+// passed) is dropped by the server on its own, with nothing for the bidder
+// to do.
+const AUTHORIZED_NOTE =
+  "Your card was authorized, not charged. If your bid didn't land in time, the hold is released automatically.";
+
 function redirectToSignedOut(): void {
   window.location.href = "/";
 }
@@ -92,12 +112,12 @@ function PaymentStep({ apiBaseUrl, roundId, onPaid }: { apiBaseUrl: string; roun
         }
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
-      setError("Checking status is taking longer than expected — try again in a moment.");
+      setError(`Checking status is taking longer than expected — try again in a moment. ${AUTHORIZED_NOTE}`);
     } catch (err) {
       setError(
         err instanceof Error
-          ? `Couldn't check your bid status (${err.message}) — your payment went through; try again in a moment.`
-          : "Couldn't check your bid status — your payment went through; try again in a moment.",
+          ? `Couldn't check your bid status (${err.message}) — try again in a moment. ${AUTHORIZED_NOTE}`
+          : `Couldn't check your bid status — try again in a moment. ${AUTHORIZED_NOTE}`,
       );
     }
     setSubmitting(false);
@@ -137,13 +157,14 @@ function PaymentStep({ apiBaseUrl, roundId, onPaid }: { apiBaseUrl: string; roun
 }
 
 /**
- * The unified Displace flow: type a bid, pay the full amount immediately,
+ * The unified Displace flow: type a bid, authorize the full amount,
  * then a required photo and an optional Instagram link. One step at a time,
  * in the same overlay Displace already opens.
  *
- * There is no separate "join" step and no deposit — every bid is a real,
- * full-amount charge the instant it's placed. If it's later outbid, the
- * whole amount is refunded automatically. A bidder who is already the
+ * There is no separate "join" step and no deposit — every bid places a
+ * full-amount authorization hold on the card the instant it's confirmed,
+ * but only the bid that holds the top spot when bidding closes is actually
+ * charged. If it's outbid, the hold is released automatically. A bidder who is already the
  * round's leader cannot raise their own bid (they have to be outbid by
  * someone else first) — `isLeading` gates the amount step for that case.
  */
@@ -155,9 +176,18 @@ export default function BidFlow({ apiBaseUrl, onDone }: { apiBaseUrl: string; on
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [sessionUser, setSessionUser] = useState<{ id: string; photoPath: string | null; characterRequest: string | null } | null>(
-    null,
-  );
+  const [sessionUser, setSessionUser] = useState<
+    { id: string; name: string; photoPath: string | null; characterRequest: string | null } | null
+  >(null);
+  // The required 18+/Terms/withdrawal-waiver box on the amount step. POST
+  // /bids refuses to place a hold without `acceptedTerms: true`, so the
+  // button is disabled until this is ticked rather than letting the visitor
+  // find out from a server error.
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
+  // Inline "change" for the public display name — null while not editing.
+  const [nameDraft, setNameDraft] = useState<string | null>(null);
+  const [nameError, setNameError] = useState<string | null>(null);
+  const [savingName, setSavingName] = useState(false);
   const [socialUrl, setSocialUrl] = useState("");
   const [socialError, setSocialError] = useState<string | null>(null);
 
@@ -165,8 +195,9 @@ export default function BidFlow({ apiBaseUrl, onDone }: { apiBaseUrl: string; on
     let cancelled = false;
     fetch(`${apiBaseUrl}/auth/me`, { credentials: "include" })
       .then((res) => (res.ok ? res.json() : null))
-      .then((data: { id: string; photoPath: string | null; characterRequest: string | null } | null) => {
-        if (!cancelled && data) setSessionUser({ id: data.id, photoPath: data.photoPath, characterRequest: data.characterRequest });
+      .then((data: { id: string; name?: string; photoPath: string | null; characterRequest: string | null } | null) => {
+        if (!cancelled && data)
+          setSessionUser({ id: data.id, name: data.name ?? "", photoPath: data.photoPath, characterRequest: data.characterRequest });
       })
       .catch(() => {});
     return () => {
@@ -208,8 +239,46 @@ export default function BidFlow({ apiBaseUrl, onDone }: { apiBaseUrl: string; on
     };
   }, [apiBaseUrl]);
 
+  async function saveName() {
+    if (nameDraft === null || !sessionUser) return;
+    const name = nameDraft.trim();
+    if (!name || name.length > MAX_NAME_LENGTH) {
+      setNameError(`Use 1–${MAX_NAME_LENGTH} characters.`);
+      return;
+    }
+    setSavingName(true);
+    setNameError(null);
+    try {
+      const res = await fetch(`${apiBaseUrl}/auth/name`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (res.status === 401) {
+        redirectToSignedOut();
+        return;
+      }
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setNameError(data.error ?? "Couldn't save that name — please try again.");
+        return;
+      }
+      setSessionUser({ ...sessionUser, name });
+      setNameDraft(null);
+    } catch (err) {
+      setNameError(err instanceof Error ? err.message : "Couldn't save that name — please try again.");
+    } finally {
+      setSavingName(false);
+    }
+  }
+
   async function handleSubmitAmount() {
     if (round === "loading" || !round) return;
+    if (!acceptedTerms) {
+      setError("Please confirm you're 18 or older and accept the Terms.");
+      return;
+    }
     const amountCents = toWholeDollarCents(bidValue);
     if (amountCents <= round.currentLeaderCents) {
       setError(`Your bid must be higher than ${formatMoney(round.currentLeaderCents)}.`);
@@ -223,7 +292,7 @@ export default function BidFlow({ apiBaseUrl, onDone }: { apiBaseUrl: string; on
         method: "POST",
         credentials: "include",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ amountCents }),
+        body: JSON.stringify({ amountCents, acceptedTerms: true }),
       });
       if (res.status === 401) {
         redirectToSignedOut();
@@ -322,10 +391,85 @@ export default function BidFlow({ apiBaseUrl, onDone }: { apiBaseUrl: string; on
           style={inputStyle}
         />
         <div style={{ marginTop: 10, fontSize: 11, color: "var(--fg-faint)" }}>
-          Charged in full now. Refunded in full if someone outbids you.
+          Your card is only authorized now — you're charged only if you hold the top bid when bidding closes at 4 PM ET. If you're outbid, the hold is released.
         </div>
+        {/*
+          Every bid — not only the leading one — is public: /current-round's
+          recentBids lists the name and amount of each recent bidder,
+          outbid ones included, in the live bid feed on the homepage and on
+          the OBS overlay streamers put on air; the leader's name is shown
+          on top of that. Say all of it before they bid, and let them pick
+          what's shown right here (PATCH /auth/name) rather than discovering
+          their full legal name next to their bid on someone's stream.
+        */}
+        {sessionUser && (
+          <div style={{ marginTop: 14, fontSize: 12, lineHeight: 1.6, color: "var(--fg-dim)" }}>
+            {nameDraft === null ? (
+              <>
+                Your display name and bid amount appear publicly in the live bid feed (including on streams
+                showing our overlay) and, while you lead, as the leader. You're shown publicly as{" "}
+                <strong style={{ color: "var(--fg)" }}>{sessionUser.name.trim() || "Anonymous"}</strong>
+                {" · "}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNameDraft(sessionUser.name);
+                    setNameError(null);
+                  }}
+                  style={linkButtonStyle}
+                >
+                  change
+                </button>
+              </>
+            ) : (
+              <div>
+                <label htmlFor="bid-flow-name" style={{ ...fieldLabelStyle, display: "block" }}>
+                  Public display name
+                </label>
+                <input
+                  id="bid-flow-name"
+                  type="text"
+                  value={nameDraft}
+                  maxLength={MAX_NAME_LENGTH}
+                  onChange={(e) => setNameDraft(e.target.value)}
+                  style={{ ...inputStyle, fontFamily: "inherit", fontSize: 14, padding: "10px 12px" }}
+                />
+                <div style={{ display: "flex", gap: 14, marginTop: 8 }}>
+                  <button type="button" onClick={saveName} disabled={savingName} style={linkButtonStyle}>
+                    {savingName ? "Saving…" : "Save name"}
+                  </button>
+                  <button type="button" onClick={() => setNameDraft(null)} style={{ ...linkButtonStyle, color: "var(--fg-faint)" }}>
+                    Cancel
+                  </button>
+                </div>
+                {nameError && <div style={{ marginTop: 6, color: "var(--fg-dim)" }}>{nameError}</div>}
+              </div>
+            )}
+          </div>
+        )}
+        <label
+          style={{ display: "flex", gap: 10, alignItems: "flex-start", marginTop: 16, fontSize: 11, lineHeight: 1.55, color: "var(--fg-dim)" }}
+        >
+          <input
+            type="checkbox"
+            checked={acceptedTerms}
+            onChange={(e) => setAcceptedTerms(e.target.checked)}
+            style={{ marginTop: 2, accentColor: "var(--gold)" }}
+          />
+          <span>
+            I'm 18 or older and agree to the{" "}
+            <a href="/terms" target="_blank" rel="noopener" style={{ textDecoration: "underline" }}>
+              Terms
+            </a>
+            . I ask for the service to start immediately and understand I lose my right of withdrawal once I win the seat.
+          </span>
+        </label>
         {error && <div style={{ marginTop: 10, fontSize: 12, color: "var(--fg-dim)" }}>{error}</div>}
-        <button onClick={handleSubmitAmount} disabled={submitting} style={primaryButtonStyle}>
+        <button
+          onClick={handleSubmitAmount}
+          disabled={submitting || !acceptedTerms}
+          style={{ ...primaryButtonStyle, opacity: acceptedTerms ? 1 : 0.5, cursor: acceptedTerms ? "pointer" : "not-allowed" }}
+        >
           {submitting ? "Please wait…" : "Displace"}
         </button>
       </div>
