@@ -32,7 +32,7 @@ describe("POST /bids", () => {
     paymentIntentCreate.mockClear();
   });
 
-  it("creates a full-amount PaymentIntent and returns its client secret", async () => {
+  it("creates a full-amount, manual-capture PaymentIntent (an authorization hold) and returns its client secret", async () => {
     const app = buildServer();
     const response = await app.inject({
       method: "POST",
@@ -47,6 +47,10 @@ describe("POST /bids", () => {
       expect.objectContaining({
         amount: 11_000,
         currency: "usd",
+        // Only the round's winner is ever collected — see
+        // engine/engine/settlement.ts. Everyone else's hold is released.
+        capture_method: "manual",
+        description: "oneaboveall.org seat bid",
         metadata: expect.objectContaining({ kind: "bid", roundId: "round-1", bidderId: "challenger" }),
       }),
     );

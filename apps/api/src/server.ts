@@ -19,6 +19,9 @@ import { registerHistoryRoute } from "./routes/history";
 import { registerPageViewsRoute } from "./routes/pageViews";
 import { stripe, STRIPE_CURRENCY, STRIPE_WEBHOOK_SECRET } from "./stripeClient";
 import { StripePaymentProvider } from "./payments/StripePaymentProvider";
+import { ResendNotifier } from "./notifications/ResendNotifier";
+import type { PaymentProvider } from "engine/payments/PaymentProvider";
+import type { Notifier } from "engine/notifications/Notifier";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -26,7 +29,12 @@ declare module "fastify" {
   }
 }
 
-export function buildServer(): FastifyInstance {
+// index.ts passes the same provider/notifier instances it hands to the
+// scheduler (so e.g. the "RESEND_API_KEY unset" warning is logged once per
+// process, not once per consumer); tests that don't care get the defaults.
+export function buildServer(
+  deps: { provider?: PaymentProvider; notifier?: Notifier } = {},
+): FastifyInstance {
   const app = Fastify({
     logger: {
       // Fastify's default request serializer logs the full request URL,
@@ -143,14 +151,15 @@ export function buildServer(): FastifyInstance {
   if (!STRIPE_WEBHOOK_SECRET) {
     throw new Error("STRIPE_WEBHOOK_SECRET is required.");
   }
-  const stripeProvider = new StripePaymentProvider(stripe);
+  const stripeProvider = deps.provider ?? new StripePaymentProvider(stripe);
+  const notifier = deps.notifier ?? new ResendNotifier();
 
   registerSceneRoute(app);
   registerLeaderboardRoute(app);
   registerCurrentRoundRoute(app);
   registerPlaceBidRoute(app, stripe, STRIPE_CURRENCY);
   registerRoundParticipationRoute(app);
-  registerStripeWebhookRoute(app, stripe, STRIPE_WEBHOOK_SECRET, stripeProvider);
+  registerStripeWebhookRoute(app, stripe, STRIPE_WEBHOOK_SECRET, stripeProvider, notifier);
   registerGoogleAuthRoutes(app);
   registerAppleAuthRoutes(app);
   registerAuthMeRoutes(app);

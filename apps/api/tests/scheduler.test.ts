@@ -5,7 +5,13 @@ vi.mock("engine/engine/scheduler", () => ({
 }));
 
 import { tick } from "engine/engine/scheduler";
-import { startScheduler } from "../src/scheduler";
+import { FakePaymentProvider } from "engine/payments/FakePaymentProvider";
+import { FakeNotifier } from "engine/notifications/FakeNotifier";
+import { startScheduler as startSchedulerWith } from "../src/scheduler";
+
+const provider = new FakePaymentProvider();
+const notifier = new FakeNotifier();
+const startScheduler = () => startSchedulerWith({ provider, notifier });
 
 describe("startScheduler", () => {
   beforeEach(() => {
@@ -26,6 +32,36 @@ describe("startScheduler", () => {
   // module already picked up.
   const DEFAULT_INTERVAL_MS = 3000;
 
+  it("passes the payment provider and notifier through to tick()", async () => {
+    vi.mocked(tick).mockResolvedValue(undefined);
+
+    startScheduler();
+    await vi.advanceTimersByTimeAsync(DEFAULT_INTERVAL_MS);
+
+    expect(tick).toHaveBeenCalledWith(expect.any(Date), expect.objectContaining({ provider, notifier }));
+  });
+
+  // Settlement makes payment-provider calls inside a tick, so one can
+  // easily outlast the interval — and two overlapping ticks would race to
+  // capture/release the same holds.
+  it("skips a tick while the previous one is still running", async () => {
+    let finishFirst!: () => void;
+    vi.mocked(tick).mockImplementationOnce(() => new Promise<void>((resolve) => (finishFirst = resolve)));
+    vi.mocked(tick).mockResolvedValue(undefined);
+
+    startScheduler();
+    await vi.advanceTimersByTimeAsync(DEFAULT_INTERVAL_MS);
+    expect(tick).toHaveBeenCalledTimes(1);
+
+    // Two more intervals pass while the first tick is still in flight.
+    await vi.advanceTimersByTimeAsync(DEFAULT_INTERVAL_MS * 2);
+    expect(tick).toHaveBeenCalledTimes(1);
+
+    finishFirst();
+    await vi.advanceTimersByTimeAsync(DEFAULT_INTERVAL_MS);
+    expect(tick).toHaveBeenCalledTimes(2);
+  });
+
   it("calls tick() on every interval, using the current time", async () => {
     vi.mocked(tick).mockResolvedValue(undefined);
 
@@ -43,8 +79,8 @@ describe("startScheduler", () => {
     process.env.WEB_REBUILD_URL = "http://web-rebuilder.internal/rebuild";
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockResolvedValue({ ok: true, status: 200 } as Response);
-    vi.mocked(tick).mockImplementation(async (_now, onInstalled) => {
-      onInstalled?.("bidder-1");
+    vi.mocked(tick).mockImplementation(async (_now, deps) => {
+      deps.onInstalled?.("bidder-1");
     });
 
     startScheduler();
@@ -56,8 +92,8 @@ describe("startScheduler", () => {
 
   it("never calls fetch when WEB_REBUILD_URL is unset", async () => {
     const fetchMock = vi.mocked(fetch);
-    vi.mocked(tick).mockImplementation(async (_now, onInstalled) => {
-      onInstalled?.("bidder-1");
+    vi.mocked(tick).mockImplementation(async (_now, deps) => {
+      deps.onInstalled?.("bidder-1");
     });
 
     startScheduler();
@@ -85,8 +121,8 @@ describe("startScheduler", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockRejectedValue(new Error("connection refused"));
-    vi.mocked(tick).mockImplementation(async (_now, onInstalled) => {
-      onInstalled?.("bidder-1");
+    vi.mocked(tick).mockImplementation(async (_now, deps) => {
+      deps.onInstalled?.("bidder-1");
     });
 
     startScheduler();

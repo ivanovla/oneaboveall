@@ -1,4 +1,6 @@
 import { tick } from "engine/engine/scheduler";
+import type { PaymentProvider } from "engine/payments/PaymentProvider";
+import type { Notifier } from "engine/notifications/Notifier";
 
 // Nothing in this codebase called scheduler.tick() outside of tests before
 // this file existed — bidding windows would never actually close in
@@ -30,17 +32,35 @@ async function notifyWebRebuild(): Promise<void> {
   }
 }
 
-export function startScheduler(): void {
+export function startScheduler(deps: { provider: PaymentProvider; notifier?: Notifier }): void {
+  // Ticks never overlap. Settlement captures/releases holds through Stripe
+  // inside a tick, so one can outlast the interval; a second tick starting
+  // meanwhile would re-select the same unsettled round and race the first
+  // to capture and release the same PaymentIntents. Skipping (not queueing)
+  // is enough — the next interval after the slow tick finishes picks up
+  // whatever is still due. Per call, not module-level, so each scheduler
+  // instance (and each test) has its own flag.
+  let running = false;
   setInterval(() => {
-    tick(new Date(), () => {
-      void notifyWebRebuild();
-    }).catch((err) => {
-      // tick() already isolates per-round failures internally (see
-      // scheduler.ts's own comment) — reaching here means something failed
-      // before that loop even started (e.g. the initial rounds select).
-      // Logging and letting the next interval retry is the same recovery
-      // behavior tick() already applies to a single round's failure.
-      console.error("scheduler: tick failed", err);
-    });
+    if (running) return;
+    running = true;
+    tick(new Date(), {
+      provider: deps.provider,
+      notifier: deps.notifier,
+      onInstalled: () => {
+        void notifyWebRebuild();
+      },
+    })
+      .catch((err) => {
+        // tick() already isolates per-round failures internally (see
+        // scheduler.ts's own comment) — reaching here means something failed
+        // before that loop even started (e.g. the initial rounds select).
+        // Logging and letting the next interval retry is the same recovery
+        // behavior tick() already applies to a single round's failure.
+        console.error("scheduler: tick failed", err);
+      })
+      .finally(() => {
+        running = false;
+      });
   }, TICK_INTERVAL_MS);
 }

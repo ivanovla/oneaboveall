@@ -2,12 +2,23 @@ import type { FastifyInstance } from "fastify";
 import type Stripe from "stripe";
 import { recordBid } from "engine/engine/recordBid";
 import type { PaymentProvider } from "engine/payments/PaymentProvider";
+import type { Notifier } from "engine/notifications/Notifier";
+
+// Both events mean "this bid's money is secured": amount_capturable_updated
+// fires when a manual-capture PaymentIntent's hold is placed (every bid
+// since holds were introduced); succeeded fires for a PaymentIntent created
+// before then, and again when settlement captures a winning hold. recordBid
+// is idempotent on the PaymentIntent id, so receiving both for one bid is a
+// no-op the second time. Both must be enabled on the Stripe webhook
+// endpoint — see infra/README.md.
+const BID_SECURED_EVENTS = new Set(["payment_intent.amount_capturable_updated", "payment_intent.succeeded"]);
 
 export function registerStripeWebhookRoute(
   app: FastifyInstance,
   stripe: Stripe,
   webhookSecret: string,
   provider: PaymentProvider,
+  notifier: Notifier,
 ): void {
   app.post("/webhooks/stripe", async (request, reply) => {
     const signature = request.headers["stripe-signature"];
@@ -39,7 +50,7 @@ export function registerStripeWebhookRoute(
     }
 
     // Everything below this line reads a cryptographically verified payload.
-    if (event.type === "payment_intent.succeeded") {
+    if (BID_SECURED_EVENTS.has(event.type)) {
       const intent = event.data.object as Stripe.PaymentIntent;
       const roundId = intent.metadata?.roundId;
       const bidderId = intent.metadata?.bidderId;
@@ -52,8 +63,8 @@ export function registerStripeWebhookRoute(
         // marker is what makes this positive identification rather than an
         // inference from which metadata keys happen to exist.
         request.log.info(
-          { paymentIntentId: intent.id },
-          "stripe webhook: payment_intent.succeeded is not a bid (no kind=bid marker / metadata), ignoring",
+          { paymentIntentId: intent.id, eventType: event.type },
+          "stripe webhook: PaymentIntent is not a bid (no kind=bid marker / metadata), ignoring",
         );
       } else {
         // recordBid is idempotent on paymentRef (the PaymentIntent id) via a
@@ -64,9 +75,10 @@ export function registerStripeWebhookRoute(
         const result = await recordBid(
           { roundId, bidderId, amountCents, paymentRef: intent.id, now: new Date() },
           provider,
+          notifier,
         );
         request.log.info(
-          { paymentIntentId: intent.id, roundId, bidderId, outcome: result.outcome },
+          { paymentIntentId: intent.id, eventType: event.type, roundId, bidderId, outcome: result.outcome },
           "stripe webhook: bid processed",
         );
       }

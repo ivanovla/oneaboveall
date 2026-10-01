@@ -110,7 +110,60 @@ describe("POST /webhooks/stripe", () => {
     expect(recordBidMock).toHaveBeenCalledWith(
       { roundId: "round-1", bidderId: "challenger", amountCents: 11_000, paymentRef: "pi_1", now: expect.any(Date) },
       expect.anything(),
+      expect.anything(),
     );
+  });
+
+  // The event a manual-capture PaymentIntent fires once the hold is in
+  // place — the one that actually records every new bid. `succeeded` above
+  // stays handled for PaymentIntents created before holds existed, and for
+  // the event our own capture fires (a no-op: already recorded).
+  it("calls recordBid the same way on payment_intent.amount_capturable_updated", async () => {
+    constructEvent.mockReturnValueOnce({
+      type: "payment_intent.amount_capturable_updated",
+      data: {
+        object: {
+          id: "pi_hold",
+          status: "requires_capture",
+          amount: 11_000,
+          amount_capturable: 11_000,
+          metadata: { kind: "bid", roundId: "round-1", bidderId: "challenger", amountCents: "11000" },
+        },
+      },
+    });
+
+    const app = buildServer();
+    const response = await app.inject({
+      method: "POST",
+      url: "/webhooks/stripe",
+      headers: { "stripe-signature": "valid" },
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(recordBidMock).toHaveBeenCalledWith(
+      { roundId: "round-1", bidderId: "challenger", amountCents: 11_000, paymentRef: "pi_hold", now: expect.any(Date) },
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("does not call recordBid for an amount_capturable_updated PaymentIntent without the kind=bid marker", async () => {
+    constructEvent.mockReturnValueOnce({
+      type: "payment_intent.amount_capturable_updated",
+      data: { object: { id: "pi_other", amount: 5_000, metadata: { roundId: "round-1" } } },
+    });
+
+    const app = buildServer();
+    const response = await app.inject({
+      method: "POST",
+      url: "/webhooks/stripe",
+      headers: { "stripe-signature": "valid" },
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(recordBidMock).not.toHaveBeenCalled();
   });
 
   it("does not call recordBid for a succeeded PaymentIntent that carries no bid metadata", async () => {
