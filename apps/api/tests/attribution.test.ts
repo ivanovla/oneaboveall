@@ -4,6 +4,7 @@ import { buildServer } from "../src/server";
 import { db, pool } from "engine/db/client";
 import { refVisits, sessions, users } from "engine/db/schema";
 import { createSession } from "../src/auth/session";
+import { isPrivateIp } from "../src/routes/attribution";
 
 vi.mock("../src/stripeClient", () => ({
   stripe: {},
@@ -79,6 +80,20 @@ describe("POST /ref-visits", () => {
     }
     const [row] = await db.select().from(refVisits).where(eq(refVisits.ref, "streamer_bob"));
     expect(row.count).toBe(1);
+  });
+
+  it("doesn't throttle when the client address is private (unknown real visitor)", async () => {
+    const app = buildServer();
+    for (let i = 0; i < 3; i++) {
+      await app.inject({ method: "POST", url: "/ref-visits", payload: { ref: "streamer_bob" }, remoteAddress: "10.42.0.5" });
+    }
+    const [row] = await db.select().from(refVisits).where(eq(refVisits.ref, "streamer_bob"));
+    expect(row.count).toBe(3);
+  });
+
+  it("isPrivateIp classifies addresses", () => {
+    for (const ip of ["127.0.0.1", "10.42.0.5", "192.168.1.2", "172.20.0.1", "::1", "fd00::1", "::ffff:10.0.0.1"]) expect(isPrivateIp(ip)).toBe(true);
+    for (const ip of ["203.0.113.1", "172.32.0.1", "8.8.8.8", "2001:db8::1"]) expect(isPrivateIp(ip)).toBe(false);
   });
 
   it("is a silent 204 no-op for an invalid or missing ref", async () => {

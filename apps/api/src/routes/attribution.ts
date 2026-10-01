@@ -21,10 +21,23 @@ import { RefVisitLimiter } from "./refVisitLimiter";
 // the limit it's the same silent 204, just not counted. request.ip is the
 // real client address because server.ts trusts the one proxy hop (Traefik)
 // in front of this service.
+// If the address the limiter would key on is itself private (loopback, a
+// cluster pod, a NATed node), the real visitor is unknown — e.g. the
+// ingress SNATs traffic and every visitor would arrive as the same node IP.
+// Throttling on it would collapse the whole audience into one budget and
+// count one visit per 30 minutes for an entire stream, which is far worse
+// for attribution than the abuse the limiter guards against. So such
+// requests skip the per-IP limiter and are simply counted.
+const PRIVATE_IP_RE = /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1$|f[cd][0-9a-f]{2}:|::ffff:(127|10)\.)/i;
+export function isPrivateIp(ip: string): boolean {
+  return PRIVATE_IP_RE.test(ip);
+}
+
 export function registerAttributionRoutes(app: FastifyInstance, limiter: RefVisitLimiter = new RefVisitLimiter()): void {
   app.post<{ Body: { ref?: unknown } }>("/ref-visits", async (request, reply) => {
     const ref = sanitizeAttributionValue(request.body?.ref);
-    if (limiter.allow(request.ip, ref) && ref) await incrementRefVisits(ref);
+    const counted = isPrivateIp(request.ip) ? ref !== null : limiter.allow(request.ip, ref);
+    if (counted && ref) await incrementRefVisits(ref);
     reply.code(204);
     return reply.send();
   });
