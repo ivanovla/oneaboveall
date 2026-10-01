@@ -55,7 +55,7 @@ describe("HistoryTable", () => {
 
     expect(screen.getByText("Leading")).toBeInTheDocument();
     expect(screen.getByText("$1,500")).toBeInTheDocument();
-    expect(screen.getByText("Outbid — refunded")).toBeInTheDocument();
+    expect(screen.getByText("Released")).toBeInTheDocument();
     expect(screen.getByText("$1,300")).toBeInTheDocument();
   });
 });

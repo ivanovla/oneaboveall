@@ -103,6 +103,19 @@ describe("BidFlow — amount step", () => {
     await waitFor(() => expect(screen.getByLabelText(/your bid/i)).toHaveValue("1001"));
   });
 
+  it("explains that the card is only authorized, and charged only if the bid wins", async () => {
+    global.fetch = mockFetch({}) as unknown as typeof fetch;
+    render(<BidFlow apiBaseUrl="http://api.test" onDone={vi.fn()} />);
+    await waitFor(() => expect(screen.getByLabelText(/your bid/i)).toBeInTheDocument());
+
+    expect(
+      screen.getByText(
+        "Your card is only authorized now — you're charged only if you hold the top bid when bidding closes at 4 PM ET. If you're outbid, the hold is released.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/charged in full now/i)).not.toBeInTheDocument();
+  });
+
   it("rejects an amount that doesn't exceed the current price, without calling any write endpoint", async () => {
     global.fetch = mockFetch({}) as unknown as typeof fetch;
     render(<BidFlow apiBaseUrl="http://api.test" onDone={vi.fn()} />);

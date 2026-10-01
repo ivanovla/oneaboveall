@@ -137,13 +137,14 @@ function PaymentStep({ apiBaseUrl, roundId, onPaid }: { apiBaseUrl: string; roun
 }
 
 /**
- * The unified Displace flow: type a bid, pay the full amount immediately,
+ * The unified Displace flow: type a bid, authorize the full amount,
  * then a required photo and an optional Instagram link. One step at a time,
  * in the same overlay Displace already opens.
  *
- * There is no separate "join" step and no deposit — every bid is a real,
- * full-amount charge the instant it's placed. If it's later outbid, the
- * whole amount is refunded automatically. A bidder who is already the
+ * There is no separate "join" step and no deposit — every bid places a
+ * full-amount authorization hold on the card the instant it's confirmed,
+ * but only the bid that holds the top spot when bidding closes is actually
+ * charged. If it's outbid, the hold is released automatically. A bidder who is already the
  * round's leader cannot raise their own bid (they have to be outbid by
  * someone else first) — `isLeading` gates the amount step for that case.
  */
@@ -322,7 +323,7 @@ export default function BidFlow({ apiBaseUrl, onDone }: { apiBaseUrl: string; on
           style={inputStyle}
         />
         <div style={{ marginTop: 10, fontSize: 11, color: "var(--fg-faint)" }}>
-          Charged in full now. Refunded in full if someone outbids you.
+          Your card is only authorized now — you're charged only if you hold the top bid when bidding closes at 4 PM ET. If you're outbid, the hold is released.
         </div>
         {error && <div style={{ marginTop: 10, fontSize: 12, color: "var(--fg-dim)" }}>{error}</div>}
         <button onClick={handleSubmitAmount} disabled={submitting} style={primaryButtonStyle}>

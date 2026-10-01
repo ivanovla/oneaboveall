@@ -112,6 +112,11 @@ APPLE_PRIVATE_KEY_PATH=./apple-private-key.p8
 
 PUBLIC_APP_URL=https://oneaboveall.org
 API_PUBLIC_URL=https://api.oneaboveall.org
+
+# Outbid / won emails (see "Email" below). Unset RESEND_API_KEY = emails are
+# skipped (one warning in the api log), nothing else breaks.
+RESEND_API_KEY=re_...
+EMAIL_FROM=oneaboveall <noreply@oneaboveall.org>
 ```
 
 Register `https://api.oneaboveall.org/auth/google/callback` and
@@ -120,10 +125,20 @@ URIs with Google and Apple respectively before the first real sign-in —
 both currently point at `127.0.0.1` for local dev only.
 
 Register the live Stripe webhook endpoint
-(`https://api.oneaboveall.org/webhooks/stripe`, `payment_intent.succeeded`)
-in the Stripe dashboard and put its signing secret in
-`STRIPE_WEBHOOK_SECRET` above — it's different from the test-mode webhook
-secret already in `apps/api/.env.example`.
+(`https://api.oneaboveall.org/webhooks/stripe`) in the Stripe dashboard
+with **both** events enabled:
+
+- `payment_intent.amount_capturable_updated` — every bid is an
+  authorization hold (`capture_method: "manual"`); this event, fired when
+  the hold is placed, is what records the bid. **Without it no bid is ever
+  recorded** (bidders' cards get held, then nothing happens).
+- `payment_intent.succeeded` — still needed for PaymentIntents created
+  before holds existed; it also fires when the scheduler captures a winner
+  at the 4 PM ET close, which is a harmless no-op.
+
+Put the endpoint's signing secret in `STRIPE_WEBHOOK_SECRET` above — it's
+different from the test-mode webhook secret already in
+`apps/api/.env.example`.
 
 ### `infra/secrets/apple-private-key.p8`
 
@@ -203,20 +218,22 @@ the next round actually closes, the api logs
 (`kubectl logs -n oneaboveall deployment/oneaboveall-api`) should show no
 `scheduler: failed to reach web rebuild trigger` errors around that time.
 
-## Email (round-won / refund notifications)
+## Email (outbid / won notifications)
 
-Out of scope for this deploy: nothing in the codebase sends these emails
-yet — there's no hook wired into `installChampion.ts` or the refund path in
-`recordBid.ts`, and no `RESEND_API_KEY` is read anywhere. Decided during
-planning: when that feature is built, send through Resend
-(https://resend.com) rather than a full mailbox — these are outbound-only
-transactional emails, nothing needs to receive replies.
+The api sends two transactional emails through Resend (https://resend.com),
+see `apps/api/src/notifications/ResendNotifier.ts`: "You've been outbid"
+when a bidder loses the top spot, and "You won the seat" when the
+scheduler captures their hold at the close (asking for a photo if they
+haven't uploaded one). Configured by `RESEND_API_KEY` and `EMAIL_FROM`
+(default `oneaboveall <noreply@oneaboveall.org>`) in `prod.env`; links
+point at `PUBLIC_APP_URL`. With no `RESEND_API_KEY` the api logs one
+warning and skips every email — bidding and settlement are unaffected, and
+a failed send is only ever logged.
 
-To have the domain ready ahead of time: create a Resend account, add
-`oneaboveall.org` as a sending domain, and add the DNS records Resend gives
-you (SPF/DKIM TXT records) at the same registrar as the A records above.
-That's a DNS/account setup step now; the actual sending code is a separate,
-later piece of work.
+Before setting the key: in Resend, add `oneaboveall.org` as a sending
+domain and add the DNS records it gives you (SPF/DKIM TXT records) at the
+same registrar as the A records above — Resend rejects mail from an
+unverified domain.
 
 ## Troubleshooting
 

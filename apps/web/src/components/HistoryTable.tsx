@@ -14,7 +14,7 @@ export type HistoryStatus = "loading" | "error" | { entries: HistoryEntry[] };
 const STATUS_LABEL: Record<BidStatus, string> = {
   active: "Leading",
   won: "Won",
-  refunded: "Outbid — refunded",
+  refunded: "Released",
 };
 
 const STATUS_COLOR: Record<BidStatus, string> = {
@@ -29,11 +29,13 @@ function formatDate(iso: string): string {
 
 /**
  * The account sidebar's personal activity history — every bid this user has
- * ever placed, grouped by round, most recent first. Every bid was a real,
- * full-amount charge at the moment it was placed: "Leading" means it's still
- * unrefunded and the round is in progress, "Won" means it's still unrefunded
- * and the round has closed, "Outbid — refunded" means a later bid displaced
- * it and the money already came back.
+ * ever placed, grouped by round, most recent first. Every bid placed a
+ * full-amount authorization hold on the card: "Leading" means it's still
+ * held and the round is in progress, "Won" means it was collected (it held
+ * the top spot at the close), "Released" means the hold was dropped — it was
+ * outbid, or couldn't be collected — and the bidder owes nothing for it.
+ * (The API still calls that status "refunded"; bids from before holds
+ * existed really were refunded.)
  *
  * Purely presentational — `status` is fetched once by UserBadge.tsx (which
  * also needs the same data to decide whether the Photo section is unlocked)
