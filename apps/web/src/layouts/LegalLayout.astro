@@ -1,0 +1,131 @@
+---
+// Long-form reading layout for the legal pages (/terms, /privacy). Wraps
+// BaseLayout (so the pages get the same fonts, theme bootstrap and link
+// preview tags) and only uses the design tokens, so it follows the visitor's
+// chosen theme — the inline script in BaseLayout applies data-theme="light"
+// before first paint.
+import BaseLayout from "./BaseLayout.astro";
+
+interface Props {
+  title: string;
+  heading: string;
+  description: string;
+  lastUpdated: string;
+}
+const { title, heading, description, lastUpdated } = Astro.props;
+---
+<BaseLayout title={title} description={description}>
+  <main class="legal">
+    <a class="legal__back" href="/">← Back to oneaboveall</a>
+    <header class="legal__header">
+      <div class="legal__eyebrow">oneaboveall</div>
+      <h1>{heading}</h1>
+      <p class="legal__updated">Last updated: {lastUpdated}</p>
+    </header>
+    <article class="legal__body">
+      <slot />
+    </article>
+    <footer class="legal__footer">
+      <a href="/terms">Terms</a>
+      <span aria-hidden="true">·</span>
+      <a href="/privacy">Privacy</a>
+      <span aria-hidden="true">·</span>
+      <a href="mailto:oneabovealldotorg@gmail.com">Contact</a>
+      <span aria-hidden="true">·</span>
+      <a href="/">Home</a>
+    </footer>
+  </main>
+</BaseLayout>
+
+<style>
+  .legal {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: clamp(28px, 6vh, 64px) 20px 72px;
+    font-size: 16px;
+    line-height: 1.7;
+    color: var(--fg);
+  }
+  .legal__back {
+    display: inline-block;
+    font-size: 12px;
+    letter-spacing: .08em;
+    color: var(--fg-dim);
+  }
+  .legal__back:hover { color: var(--gold); }
+  .legal__header {
+    margin: 36px 0 32px;
+    padding-bottom: 24px;
+    border-bottom: 1px solid var(--line);
+  }
+  .legal__eyebrow {
+    font-size: 10px;
+    letter-spacing: .3em;
+    text-transform: uppercase;
+    color: var(--gold);
+  }
+  .legal h1 {
+    font-family: 'Cormorant Garamond', Georgia, serif;
+    font-weight: 400;
+    font-size: clamp(38px, 7vw, 56px);
+    line-height: 1.05;
+    margin: 10px 0 12px;
+  }
+  .legal__updated {
+    margin: 0;
+    font-size: 13px;
+    color: var(--fg-dim);
+  }
+  .legal__body :global(h2) {
+    font-family: 'Cormorant Garamond', Georgia, serif;
+    font-weight: 500;
+    font-size: 27px;
+    line-height: 1.2;
+    margin: 44px 0 10px;
+    color: var(--fg);
+  }
+  .legal__body :global(h3) {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 24px 0 6px;
+  }
+  .legal__body :global(p),
+  .legal__body :global(ul) {
+    margin: 0 0 14px;
+  }
+  .legal__body :global(ul) { padding-left: 22px; }
+  .legal__body :global(li) { margin-bottom: 6px; }
+  .legal__body :global(strong) { font-weight: 600; }
+  .legal__body :global(code) { font-size: .88em; color: var(--fg-dim); }
+  .legal__body :global(a) {
+    color: var(--gold);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    overflow-wrap: anywhere;
+  }
+  .legal__body :global(a:hover) { color: var(--fg); }
+  .legal__body :global(.callout) {
+    margin: 18px 0;
+    padding: 16px 18px;
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--gold);
+    background: var(--panel-2);
+  }
+  .legal__body :global(.callout p:last-child) { margin-bottom: 0; }
+  .legal__footer {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 56px;
+    padding-top: 20px;
+    border-top: 1px solid var(--line);
+    font-size: 12px;
+    color: var(--fg-faint);
+  }
+  .legal__footer a { color: var(--fg-dim); }
+  .legal__footer a:hover { color: var(--gold); }
+  @media (max-width: 480px) {
+    .legal { padding-left: 18px; padding-right: 18px; font-size: 15px; }
+    .legal__body :global(h2) { font-size: 24px; margin-top: 36px; }
+  }
+</style>

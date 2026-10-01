@@ -2,6 +2,7 @@
 import BaseLayout from "../layouts/BaseLayout.astro";
 import Scene from "../components/Scene.astro";
 import AuctionFlow from "../components/AuctionFlow";
+import SiteFooter from "../components/SiteFooter.astro";
 import { adaptScene, adaptLeaderboardRow } from "../lib/sceneAdapter";
 import { mockScene, mockLeaderboard, mockReferenceNow } from "../lib/mockData";
 import type { Scene as SceneData, LeaderboardRow } from "../lib/types";
@@ -137,7 +138,7 @@ const scene: SceneData = live?.scene ?? mockScene;
 const leaderboard: LeaderboardRow[] = live?.leaderboard ?? mockLeaderboard;
 const referenceNow: Date = live?.referenceNow ?? mockReferenceNow;
 ---
-<BaseLayout title="oneaboveall">
+<BaseLayout title="oneaboveall — One above all">
   <Scene scene={scene} referenceNow={referenceNow} />
   <!--
     AuctionFlow now also renders the account badge (the one deliberate live
@@ -153,4 +154,5 @@ const referenceNow: Date = live?.referenceNow ?? mockReferenceNow;
     viewed (see AuctionFlow.tsx's own comment on `liveLeaderCents`).
   -->
   <AuctionFlow client:idle leaderboard={leaderboard} apiBaseUrl={publicApiBaseUrl} />
+  <SiteFooter />
 </BaseLayout>
