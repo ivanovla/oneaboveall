@@ -24,12 +24,61 @@ afterAll(async () => {
 describe("POST /ref-visits", () => {
   it("counts a visit per valid ref and answers 204", async () => {
     const app = buildServer();
-    for (let i = 0; i < 2; i++) {
-      const response = await app.inject({ method: "POST", url: "/ref-visits", payload: { ref: "streamer_bob" } });
+    for (const remoteAddress of ["198.51.100.1", "198.51.100.2"]) {
+      const response = await app.inject({ method: "POST", url: "/ref-visits", payload: { ref: "streamer_bob" }, remoteAddress });
       expect(response.statusCode).toBe(204);
     }
     const [row] = await db.select().from(refVisits).where(eq(refVisits.ref, "streamer_bob"));
     expect(row.count).toBe(2);
+  });
+
+  it("counts the same IP + ref only once per window, still answering 204", async () => {
+    const app = buildServer();
+    for (let i = 0; i < 3; i++) {
+      const response = await app.inject({ method: "POST", url: "/ref-visits", payload: { ref: "streamer_bob" }, remoteAddress: "198.51.100.7" });
+      expect(response.statusCode).toBe(204);
+    }
+    const [row] = await db.select().from(refVisits).where(eq(refVisits.ref, "streamer_bob"));
+    expect(row.count).toBe(1);
+  });
+
+  it("stops counting an IP after ~30 requests an hour, still answering 204", async () => {
+    const app = buildServer();
+    for (let i = 0; i < 35; i++) {
+      const response = await app.inject({ method: "POST", url: "/ref-visits", payload: { ref: `ref_${i}` }, remoteAddress: "198.51.100.9" });
+      expect(response.statusCode).toBe(204);
+    }
+    expect(await db.select().from(refVisits)).toHaveLength(30);
+  });
+
+  it("tells visitors apart by the client IP the ingress forwards, not the ingress's own address", async () => {
+    const app = buildServer();
+    for (const client of ["203.0.113.1", "203.0.113.2"]) {
+      await app.inject({
+        method: "POST",
+        url: "/ref-visits",
+        payload: { ref: "streamer_bob" },
+        remoteAddress: "10.42.0.5", // the Traefik pod
+        headers: { "x-forwarded-for": client },
+      });
+    }
+    const [row] = await db.select().from(refVisits).where(eq(refVisits.ref, "streamer_bob"));
+    expect(row.count).toBe(2);
+  });
+
+  it("can't dodge the limit by spoofing X-Forwarded-For — only the hop the ingress appended counts", async () => {
+    const app = buildServer();
+    for (const spoofed of ["1.1.1.1", "2.2.2.2", "3.3.3.3"]) {
+      await app.inject({
+        method: "POST",
+        url: "/ref-visits",
+        payload: { ref: "streamer_bob" },
+        remoteAddress: "10.42.0.5",
+        headers: { "x-forwarded-for": `${spoofed}, 203.0.113.1` },
+      });
+    }
+    const [row] = await db.select().from(refVisits).where(eq(refVisits.ref, "streamer_bob"));
+    expect(row.count).toBe(1);
   });
 
   it("is a silent 204 no-op for an invalid or missing ref", async () => {

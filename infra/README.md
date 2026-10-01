@@ -265,6 +265,14 @@ the credit, permanently.
 admin "$API/admin/stats" | jq
 ```
 
+Treat `visits` as approximate — a traffic signal, not an audit figure.
+`POST /ref-visits` is public, so the API throttles it in memory per client
+IP (`apps/api/src/routes/refVisitLimiter.ts`): one counted visit per IP per
+ref per 30 minutes and at most ~30 counted requests per IP per hour. Many
+people behind one NAT (a campus, a mobile carrier) can count as fewer
+visits; an API restart resets the throttle, so a few repeats can count
+twice. Sign-ups, bidders, winners and revenue are exact.
+
 **Current round** — the champion, the leader and the runner-up (the two
 card holds still alive), each with user id, name, email, amount, whether
 the hold was captured, whether a photo is on file, social link, character

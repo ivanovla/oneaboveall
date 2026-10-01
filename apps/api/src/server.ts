@@ -38,6 +38,14 @@ export function buildServer(
   deps: { provider?: PaymentProvider; notifier?: Notifier } = {},
 ): FastifyInstance {
   const app = Fastify({
+    // The API is only reachable through the Traefik ingress (its Service is
+    // ClusterIP — infra/k8s/api.yaml), so every request's socket address is
+    // Traefik's own pod. Trusting exactly one hop makes request.ip the
+    // address Traefik appended to X-Forwarded-For — the real client — which
+    // the /ref-visits limiter keys on. One hop, not `true`: with `true`
+    // Fastify would take the leftmost X-Forwarded-For entry, which the
+    // client itself writes and could set to anything.
+    trustProxy: 1,
     logger: {
       // Fastify's default request serializer logs the full request URL,
       // including its query string. Several routes put credential-shaped
