@@ -161,7 +161,7 @@ export function buildServer(
   registerCurrentRoundRoute(app);
   registerPlaceBidRoute(app, stripe, STRIPE_CURRENCY);
   registerRoundParticipationRoute(app);
-  registerStripeWebhookRoute(app, stripe, STRIPE_WEBHOOK_SECRET, stripeProvider, notifier);
+  registerStripeWebhookRoute(app, stripe, STRIPE_WEBHOOK_SECRET, stripeProvider, notifier, STRIPE_CURRENCY);
   registerGoogleAuthRoutes(app);
   registerAppleAuthRoutes(app);
   registerAuthMeRoutes(app);

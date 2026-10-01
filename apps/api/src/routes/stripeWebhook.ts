@@ -19,6 +19,7 @@ export function registerStripeWebhookRoute(
   webhookSecret: string,
   provider: PaymentProvider,
   notifier: Notifier,
+  currency: string,
 ): void {
   app.post("/webhooks/stripe", async (request, reply) => {
     const signature = request.headers["stripe-signature"];
@@ -66,6 +67,39 @@ export function registerStripeWebhookRoute(
           { paymentIntentId: intent.id, eventType: event.type },
           "stripe webhook: PaymentIntent is not a bid (no kind=bid marker / metadata), ignoring",
         );
+      } else if (!(intent.status === "requires_capture" || intent.status === "succeeded")) {
+        // The metadata says "bid", but the money isn't secured — a hold that
+        // was since cancelled, a redelivery racing a status change. Nothing
+        // to record and no hold to drop.
+        request.log.info(
+          { paymentIntentId: intent.id, eventType: event.type, status: intent.status },
+          "stripe webhook: bid PaymentIntent is neither held nor succeeded, ignoring",
+        );
+      } else if (intent.amount !== amountCents || intent.currency !== currency) {
+        // The metadata is what POST /bids wrote, but what Stripe actually
+        // holds is intent.amount in intent.currency — and the two must agree
+        // before a bid is recorded at the metadata's amount. They always do
+        // for a PaymentIntent this service created; a mismatch means
+        // something edited it out from under us, and recording it would
+        // credit a bid with money we don't hold. Not a bid we can honor, so
+        // a live hold is dropped rather than left stranded on the card. A
+        // succeeded one (only ever a pre-holds legacy charge) is just logged
+        // for an operator to look at — refunding is a human call.
+        request.log.warn(
+          {
+            paymentIntentId: intent.id,
+            eventType: event.type,
+            status: intent.status,
+            amount: intent.amount,
+            currency: intent.currency,
+            expectedAmount: amountCents,
+            expectedCurrency: currency,
+          },
+          "stripe webhook: bid PaymentIntent amount/currency doesn't match its bid metadata, ignoring",
+        );
+        // A failure here propagates as a 500, so Stripe redelivers and the
+        // release is retried — release is idempotent.
+        if (intent.status === "requires_capture") await provider.release(intent.id);
       } else {
         // recordBid is idempotent on paymentRef (the PaymentIntent id) via a
         // DB unique constraint, so a Stripe redelivery of this same event is
