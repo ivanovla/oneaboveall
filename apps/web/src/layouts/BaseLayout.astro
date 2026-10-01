@@ -64,6 +64,8 @@ const imageUrl = new URL(image, SITE_ORIGIN).href;
         /* storage unavailable — fall back to the default dark theme */
       }
     </script>
+    <!-- Page-specific head tags (e.g. /overlay's noindex and transparent body). -->
+    <slot name="head" />
   </head>
   <body>
     <slot />

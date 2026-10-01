@@ -4,11 +4,14 @@
 // (enabled by getViteConfig in vitest.config.ts) and checks the HTML that
 // crawlers and visitors actually receive.
 import { describe, it, expect, beforeAll } from "vitest";
+import { readFileSync } from "node:fs";
 import { experimental_AstroContainer as AstroContainer } from "astro/container";
 import SiteFooter from "../src/components/SiteFooter.astro";
 import BaseLayout from "../src/layouts/BaseLayout.astro";
 import TermsPage from "../src/pages/terms.astro";
 import PrivacyPage from "../src/pages/privacy.astro";
+import Scene from "../src/components/Scene.astro";
+import OverlayPage from "../src/pages/overlay.astro";
 
 let container: AstroContainer;
 beforeAll(async () => {
@@ -91,5 +94,60 @@ describe("legal pages", () => {
     for (const p of ["Stripe", "Resend", "Hetzner", "AEPD"]) expect(html).toContain(p);
     expect(html).toContain('href="/"');
     expect(html).not.toMatch(/draft/i);
+  });
+});
+
+describe("Scene hover cards", () => {
+  const since = new Date("2026-10-01T12:00:00Z");
+  const person = (name: string, sponsored: boolean) => ({
+    occupantId: name,
+    name,
+    priceCents: 100_000,
+    since,
+    heldLabel: "1d",
+    socialUrl: "https://x.com/" + name,
+    sponsored,
+  });
+
+  it("flags sponsored people for the 'Sponsored creator' tag and marks social links nofollow/ugc", async () => {
+    const html = await container.renderToString(Scene, {
+      props: { scene: { champion: person("Champ", true), retinue: [person("Past", false)] }, referenceNow: since },
+    });
+    expect(html).toMatch(/data-name="Champ"[^>]*data-sponsored="true"/);
+    expect(html).toMatch(/data-name="Past"[^>]*data-sponsored="false"/);
+    expect(html).toContain("Sponsored creator");
+    expect(html).toContain('rel="nofollow ugc noopener noreferrer"');
+    expect(html).toContain('target="_blank"');
+  });
+});
+
+describe("/overlay", () => {
+  it("is noindex, transparent, footer-free and never records attribution", async () => {
+    const reactRenderer = await import("@astrojs/react/server.js");
+    container.addServerRenderer({ name: "@astrojs/react", renderer: reactRenderer.default });
+    container.addClientRenderer({ name: "@astrojs/react", entrypoint: "@astrojs/react/client.js" });
+    const html = await container.renderToString(OverlayPage, {
+      request: new Request("http://127.0.0.1:4321/overlay"),
+    });
+    expect(meta(html, "name", "robots")).toBe("noindex, nofollow");
+    expect(html).toMatch(/background:\s*transparent/);
+    expect(html).not.toContain('href="/terms"');
+    // The island's server-rendered first frame.
+    expect(html).toContain("oneaboveall.org");
+    expect(html).toContain("Loading…");
+  });
+});
+
+// Astro bundles a component's <script> into every page that imports it, so
+// "which pages record attribution" is decided by which files include the
+// tracker — checked at the source level, since the container API doesn't
+// emit hoisted scripts.
+describe("attribution tracking coverage", () => {
+  const src = (p: string) => readFileSync(new URL(`../src/${p}`, import.meta.url), "utf8");
+  it("runs on the homepage and legal pages but never on the OBS overlay", () => {
+    expect(src("pages/index.astro")).toContain("<AttributionTracker />");
+    expect(src("layouts/LegalLayout.astro")).toContain("<AttributionTracker />");
+    expect(src("layouts/BaseLayout.astro")).not.toContain("AttributionTracker");
+    expect(src("pages/overlay.astro")).not.toMatch(/^import .*AttributionTracker/m);
   });
 });
