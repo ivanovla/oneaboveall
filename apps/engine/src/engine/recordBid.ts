@@ -1,3 +1,6 @@
+import { eq } from "drizzle-orm";
+import { db } from "../db/client";
+import { bids } from "../db/schema";
 import { recordBidAtomic } from "../db/repository";
 import type { PaymentProvider } from "../payments/PaymentProvider";
 import { noopNotifier, notifySafely, type Notifier } from "../notifications/Notifier";
@@ -42,6 +45,17 @@ export async function recordBid(
     // webhook landed the bid no longer qualifies (outbid in a race, the
     // round closed, or the bidder was already leading). Drop it rather than
     // stranding a hold with no bid to show for it.
+    //
+    // Unless the bid *was* recorded after all: two concurrent deliveries of
+    // the same webhook each run their own transaction, and the one whose
+    // snapshot predates the other's commit never sees the row — it can come
+    // back "rejected" (say it landed a moment later and saw the close) while
+    // the other delivery recorded the bid. Releasing here would cancel the
+    // hold under a live, recorded bid. So check, outside that snapshot, for
+    // a row with this paymentRef first; if there is one, this delivery is
+    // just a duplicate.
+    const [recorded] = await db.select({ id: bids.id }).from(bids).where(eq(bids.paymentRef, params.paymentRef)).limit(1);
+    if (recorded) return { outcome: "already-recorded" };
     await provider.release(params.paymentRef);
     return { outcome: "released" };
   }
