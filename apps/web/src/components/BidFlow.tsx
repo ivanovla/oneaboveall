@@ -58,6 +58,17 @@ const inputStyle: React.CSSProperties = {
   outline: "none",
 };
 
+const linkButtonStyle: React.CSSProperties = {
+  padding: 0,
+  fontSize: "inherit",
+  color: "var(--gold)",
+  textDecoration: "underline",
+  textUnderlineOffset: 2,
+};
+
+// Same limit PATCH /auth/name enforces (apps/api/src/routes/authMe.ts).
+const MAX_NAME_LENGTH = 80;
+
 function redirectToSignedOut(): void {
   window.location.href = "/";
 }
@@ -156,9 +167,18 @@ export default function BidFlow({ apiBaseUrl, onDone }: { apiBaseUrl: string; on
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [sessionUser, setSessionUser] = useState<{ id: string; photoPath: string | null; characterRequest: string | null } | null>(
-    null,
-  );
+  const [sessionUser, setSessionUser] = useState<
+    { id: string; name: string; photoPath: string | null; characterRequest: string | null } | null
+  >(null);
+  // The required 18+/Terms/withdrawal-waiver box on the amount step. POST
+  // /bids refuses to place a hold without `acceptedTerms: true`, so the
+  // button is disabled until this is ticked rather than letting the visitor
+  // find out from a server error.
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
+  // Inline "change" for the public display name — null while not editing.
+  const [nameDraft, setNameDraft] = useState<string | null>(null);
+  const [nameError, setNameError] = useState<string | null>(null);
+  const [savingName, setSavingName] = useState(false);
   const [socialUrl, setSocialUrl] = useState("");
   const [socialError, setSocialError] = useState<string | null>(null);
 
@@ -166,8 +186,9 @@ export default function BidFlow({ apiBaseUrl, onDone }: { apiBaseUrl: string; on
     let cancelled = false;
     fetch(`${apiBaseUrl}/auth/me`, { credentials: "include" })
       .then((res) => (res.ok ? res.json() : null))
-      .then((data: { id: string; photoPath: string | null; characterRequest: string | null } | null) => {
-        if (!cancelled && data) setSessionUser({ id: data.id, photoPath: data.photoPath, characterRequest: data.characterRequest });
+      .then((data: { id: string; name?: string; photoPath: string | null; characterRequest: string | null } | null) => {
+        if (!cancelled && data)
+          setSessionUser({ id: data.id, name: data.name ?? "", photoPath: data.photoPath, characterRequest: data.characterRequest });
       })
       .catch(() => {});
     return () => {
@@ -209,8 +230,46 @@ export default function BidFlow({ apiBaseUrl, onDone }: { apiBaseUrl: string; on
     };
   }, [apiBaseUrl]);
 
+  async function saveName() {
+    if (nameDraft === null || !sessionUser) return;
+    const name = nameDraft.trim();
+    if (!name || name.length > MAX_NAME_LENGTH) {
+      setNameError(`Use 1–${MAX_NAME_LENGTH} characters.`);
+      return;
+    }
+    setSavingName(true);
+    setNameError(null);
+    try {
+      const res = await fetch(`${apiBaseUrl}/auth/name`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (res.status === 401) {
+        redirectToSignedOut();
+        return;
+      }
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setNameError(data.error ?? "Couldn't save that name — please try again.");
+        return;
+      }
+      setSessionUser({ ...sessionUser, name });
+      setNameDraft(null);
+    } catch (err) {
+      setNameError(err instanceof Error ? err.message : "Couldn't save that name — please try again.");
+    } finally {
+      setSavingName(false);
+    }
+  }
+
   async function handleSubmitAmount() {
     if (round === "loading" || !round) return;
+    if (!acceptedTerms) {
+      setError("Please confirm you're 18 or older and accept the Terms.");
+      return;
+    }
     const amountCents = toWholeDollarCents(bidValue);
     if (amountCents <= round.currentLeaderCents) {
       setError(`Your bid must be higher than ${formatMoney(round.currentLeaderCents)}.`);
@@ -224,7 +283,7 @@ export default function BidFlow({ apiBaseUrl, onDone }: { apiBaseUrl: string; on
         method: "POST",
         credentials: "include",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ amountCents }),
+        body: JSON.stringify({ amountCents, acceptedTerms: true }),
       });
       if (res.status === 401) {
         redirectToSignedOut();
@@ -325,8 +384,79 @@ export default function BidFlow({ apiBaseUrl, onDone }: { apiBaseUrl: string; on
         <div style={{ marginTop: 10, fontSize: 11, color: "var(--fg-faint)" }}>
           Your card is only authorized now — you're charged only if you hold the top bid when bidding closes at 4 PM ET. If you're outbid, the hold is released.
         </div>
+        {/*
+          The leader's name goes on the homepage, the OBS overlay streamers
+          put on air, and the live bid feed — say so before they bid, and let
+          them pick what's shown right here (PATCH /auth/name) rather than
+          discovering their full legal name on someone's stream.
+        */}
+        {sessionUser && (
+          <div style={{ marginTop: 14, fontSize: 12, lineHeight: 1.6, color: "var(--fg-dim)" }}>
+            {nameDraft === null ? (
+              <>
+                While you lead, you're shown publicly as{" "}
+                <strong style={{ color: "var(--fg)" }}>{sessionUser.name.trim() || "Anonymous"}</strong>
+                {" · "}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNameDraft(sessionUser.name);
+                    setNameError(null);
+                  }}
+                  style={linkButtonStyle}
+                >
+                  change
+                </button>
+              </>
+            ) : (
+              <div>
+                <label htmlFor="bid-flow-name" style={{ ...fieldLabelStyle, display: "block" }}>
+                  Public display name
+                </label>
+                <input
+                  id="bid-flow-name"
+                  type="text"
+                  value={nameDraft}
+                  maxLength={MAX_NAME_LENGTH}
+                  onChange={(e) => setNameDraft(e.target.value)}
+                  style={{ ...inputStyle, fontFamily: "inherit", fontSize: 14, padding: "10px 12px" }}
+                />
+                <div style={{ display: "flex", gap: 14, marginTop: 8 }}>
+                  <button type="button" onClick={saveName} disabled={savingName} style={linkButtonStyle}>
+                    {savingName ? "Saving…" : "Save name"}
+                  </button>
+                  <button type="button" onClick={() => setNameDraft(null)} style={{ ...linkButtonStyle, color: "var(--fg-faint)" }}>
+                    Cancel
+                  </button>
+                </div>
+                {nameError && <div style={{ marginTop: 6, color: "var(--fg-dim)" }}>{nameError}</div>}
+              </div>
+            )}
+          </div>
+        )}
+        <label
+          style={{ display: "flex", gap: 10, alignItems: "flex-start", marginTop: 16, fontSize: 11, lineHeight: 1.55, color: "var(--fg-dim)" }}
+        >
+          <input
+            type="checkbox"
+            checked={acceptedTerms}
+            onChange={(e) => setAcceptedTerms(e.target.checked)}
+            style={{ marginTop: 2, accentColor: "var(--gold)" }}
+          />
+          <span>
+            I'm 18 or older and agree to the{" "}
+            <a href="/terms" target="_blank" rel="noopener" style={{ textDecoration: "underline" }}>
+              Terms
+            </a>
+            . I ask for the service to start immediately and understand I lose my right of withdrawal once I win the seat.
+          </span>
+        </label>
         {error && <div style={{ marginTop: 10, fontSize: 12, color: "var(--fg-dim)" }}>{error}</div>}
-        <button onClick={handleSubmitAmount} disabled={submitting} style={primaryButtonStyle}>
+        <button
+          onClick={handleSubmitAmount}
+          disabled={submitting || !acceptedTerms}
+          style={{ ...primaryButtonStyle, opacity: acceptedTerms ? 1 : 0.5, cursor: acceptedTerms ? "pointer" : "not-allowed" }}
+        >
           {submitting ? "Please wait…" : "Displace"}
         </button>
       </div>

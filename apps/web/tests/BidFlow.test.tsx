@@ -35,6 +35,7 @@ function mockFetch(handlers: {
   photoError?: string;
   socialOk?: boolean;
   socialError?: string;
+  nameOk?: boolean;
 }) {
   // Mutable, not just the initial `handlers.isLeading` — a successful
   // POST /bids flips this, the same way the real webhook-driven bid
@@ -64,6 +65,11 @@ function mockFetch(handlers: {
     if (path === "/auth/character-request" && init?.method === "PATCH") {
       return { ok: true, status: 200, json: async () => ({ characterRequest: null }) };
     }
+    if (path === "/auth/name" && init?.method === "PATCH") {
+      return handlers.nameOk === false
+        ? { ok: false, status: 400, json: async () => ({ error: "a name between 1 and 80 characters is required" }) }
+        : { ok: true, status: 200, json: async () => ({ id: "u1", name: JSON.parse(init.body as string).name }) };
+    }
     if (path === "/auth/social" && init?.method === "PATCH") {
       return handlers.socialOk === false
         ? { ok: false, status: 400, json: async () => ({ error: handlers.socialError ?? "a valid URL is required" }) }
@@ -71,6 +77,13 @@ function mockFetch(handlers: {
     }
     throw new Error(`unexpected fetch: ${url} ${init?.method ?? "GET"}`);
   });
+}
+
+// The amount step's required 18+/Terms/withdrawal-waiver checkbox must be
+// ticked before Displace does anything.
+function acceptTermsAndDisplace() {
+  fireEvent.click(screen.getByLabelText(/I'm 18 or older/i));
+  fireEvent.click(screen.getByText("Displace"));
 }
 
 describe("BidFlow — loading and empty states", () => {
@@ -122,7 +135,7 @@ describe("BidFlow — amount step", () => {
     await waitFor(() => expect(screen.getByLabelText(/your bid/i)).toBeInTheDocument());
 
     fireEvent.change(screen.getByLabelText(/your bid/i), { target: { value: "500" } });
-    fireEvent.click(screen.getByText("Displace"));
+    acceptTermsAndDisplace();
 
     await waitFor(() => expect(screen.getByText(/must be higher than/i)).toBeInTheDocument());
     expect(global.fetch).not.toHaveBeenCalledWith(expect.stringContaining("/bids"), expect.anything());
@@ -135,14 +148,14 @@ describe("BidFlow — amount step", () => {
     await waitFor(() => expect(screen.getByLabelText(/your bid/i)).toBeInTheDocument());
 
     fireEvent.change(screen.getByLabelText(/your bid/i), { target: { value: "1500" } });
-    fireEvent.click(screen.getByText("Displace"));
+    acceptTermsAndDisplace();
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith("http://api.test/bids", {
         method: "POST",
         credentials: "include",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ amountCents: 150_000 }),
+        body: JSON.stringify({ amountCents: 150_000, acceptedTerms: true }),
       }),
     );
     await waitFor(() => expect(screen.getByTestId("payment-element")).toBeInTheDocument());
@@ -155,10 +168,75 @@ describe("BidFlow — amount step", () => {
     await waitFor(() => expect(screen.getByLabelText(/your bid/i)).toBeInTheDocument());
 
     fireEvent.change(screen.getByLabelText(/your bid/i), { target: { value: "1500" } });
-    fireEvent.click(screen.getByText("Displace"));
+    acceptTermsAndDisplace();
 
     await waitFor(() => expect(screen.getByText("You are already the current leader.")).toBeInTheDocument());
     expect(screen.queryByTestId("payment-element")).not.toBeInTheDocument();
+  });
+});
+
+describe("BidFlow — terms consent", () => {
+  it("keeps Displace disabled until the 18+/Terms box is ticked, and links the Terms", async () => {
+    const fetchMock = mockFetch({});
+    global.fetch = fetchMock as unknown as typeof fetch;
+    render(<BidFlow apiBaseUrl="http://api.test" onDone={vi.fn()} />);
+    await waitFor(() => expect(screen.getByLabelText(/your bid/i)).toBeInTheDocument());
+
+    const checkbox = screen.getByLabelText(/I'm 18 or older/i);
+    expect(checkbox).not.toBeChecked();
+    expect(screen.getByText(/lose my right of withdrawal once I win the seat/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Terms" })).toHaveAttribute("href", "/terms");
+
+    const displace = screen.getByText("Displace");
+    expect(displace).toBeDisabled();
+    fireEvent.click(displace);
+    expect(fetchMock).not.toHaveBeenCalledWith("http://api.test/bids", expect.anything());
+
+    fireEvent.click(checkbox);
+    expect(displace).not.toBeDisabled();
+  });
+});
+
+describe("BidFlow — public display name", () => {
+  it("tells the bidder which name is shown publicly while they lead", async () => {
+    global.fetch = mockFetch({}) as unknown as typeof fetch;
+    render(<BidFlow apiBaseUrl="http://api.test" onDone={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText(/shown publicly as/i)).toBeInTheDocument());
+    expect(screen.getByText("A")).toBeInTheDocument();
+  });
+
+  it("lets them change it inline via PATCH /auth/name", async () => {
+    const fetchMock = mockFetch({});
+    global.fetch = fetchMock as unknown as typeof fetch;
+    render(<BidFlow apiBaseUrl="http://api.test" onDone={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText("change")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText("change"));
+    fireEvent.change(screen.getByLabelText(/public display name/i), { target: { value: "  Night Owl " } });
+    fireEvent.click(screen.getByText("Save name"));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("http://api.test/auth/name", {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "Night Owl" }),
+      }),
+    );
+    await waitFor(() => expect(screen.getByText("Night Owl")).toBeInTheDocument());
+    expect(screen.queryByLabelText(/public display name/i)).not.toBeInTheDocument();
+  });
+
+  it("rejects an empty name without calling the API", async () => {
+    const fetchMock = mockFetch({});
+    global.fetch = fetchMock as unknown as typeof fetch;
+    render(<BidFlow apiBaseUrl="http://api.test" onDone={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText("change")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("change"));
+    fireEvent.change(screen.getByLabelText(/public display name/i), { target: { value: "   " } });
+    fireEvent.click(screen.getByText("Save name"));
+    expect(screen.getByText(/Use 1–80 characters/)).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith("http://api.test/auth/name", expect.anything());
   });
 });
 
@@ -169,7 +247,7 @@ describe("BidFlow — payment then photo", () => {
     render(<BidFlow apiBaseUrl="http://api.test" onDone={vi.fn()} />);
     await waitFor(() => expect(screen.getByLabelText(/your bid/i)).toBeInTheDocument());
     fireEvent.change(screen.getByLabelText(/your bid/i), { target: { value: "1500" } });
-    fireEvent.click(screen.getByText("Displace"));
+    acceptTermsAndDisplace();
     await waitFor(() => expect(screen.getByTestId("payment-element")).toBeInTheDocument());
 
     fireEvent.click(screen.getByText("Confirm payment"));
@@ -184,7 +262,7 @@ describe("BidFlow — photo step", () => {
     render(<BidFlow apiBaseUrl="http://api.test" onDone={vi.fn()} />);
     await waitFor(() => expect(screen.getByLabelText(/your bid/i)).toBeInTheDocument());
     fireEvent.change(screen.getByLabelText(/your bid/i), { target: { value: "1500" } });
-    fireEvent.click(screen.getByText("Displace"));
+    acceptTermsAndDisplace();
     await waitFor(() => expect(screen.getByTestId("payment-element")).toBeInTheDocument());
     fireEvent.click(screen.getByText("Confirm payment"));
     await waitFor(() => expect(screen.getByText(/send your face/i)).toBeInTheDocument());
@@ -236,7 +314,7 @@ describe("BidFlow — social step (optional)", () => {
     render(<BidFlow apiBaseUrl="http://api.test" onDone={onDone} />);
     await waitFor(() => expect(screen.getByLabelText(/your bid/i)).toBeInTheDocument());
     fireEvent.change(screen.getByLabelText(/your bid/i), { target: { value: "1500" } });
-    fireEvent.click(screen.getByText("Displace"));
+    acceptTermsAndDisplace();
     await waitFor(() => expect(screen.getByTestId("payment-element")).toBeInTheDocument());
     fireEvent.click(screen.getByText("Confirm payment"));
     await waitFor(() => expect(screen.getByLabelText("Photo")).toBeInTheDocument());
