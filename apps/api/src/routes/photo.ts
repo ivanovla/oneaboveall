@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import { createReadStream, createWriteStream } from "node:fs";
 import { mkdir, unlink } from "node:fs/promises";
 import path from "node:path";
@@ -92,19 +92,40 @@ export function registerPhotoRoutes(app: FastifyInstance): void {
     return { photoPath: filename };
   });
 
-  // Public — a round's champion is meant to be shown on the homepage, so
-  // this can't require a session. Nothing sensitive is exposed: the file
-  // itself is a photo the user explicitly uploaded to be shown publicly,
-  // and the path is a server-assigned `<userId>.<ext>`, never derived from
-  // request input beyond the id used to look it up.
+  // Owner-only: a raw upload is personal data (a face), and nothing public
+  // ever needs it — the homepage shows the composed scene.jpg the operator
+  // renders from it, and the operator fetches it through GET
+  // /admin/photos/:userId (see admin.ts). The owner still needs it for
+  // PhotoUploader's "current photo" preview, which loads it as a plain
+  // <img src> — the session cookie rides along because api.oneaboveall.org
+  // and oneaboveall.org are same-site (SameSite=Lax is enough).
+  //
+  // A different signed-in user gets the exact same 404 as "no photo", so
+  // this can't be used to probe which ids exist or have uploaded one.
   app.get<{ Params: { userId: string } }>("/photos/:userId", async (request, reply) => {
-    const [row] = await db.select({ photoPath: users.photoPath }).from(users).where(eq(users.id, request.params.userId)).limit(1);
-    if (!row?.photoPath) {
+    const user = await requireSession(request, reply);
+    if (!user) return;
+    if (user.id !== request.params.userId || !user.photoPath) {
       reply.code(404);
       return { error: "no photo" };
     }
-    const ext = row.photoPath.split(".").pop() ?? "";
-    reply.type(EXT_TO_MIME[ext] ?? "application/octet-stream");
-    return reply.send(createReadStream(path.join(UPLOAD_DIR, row.photoPath)));
+    // Personal data behind a cookie: never let a shared cache keep a copy.
+    reply.header("cache-control", "private, no-store");
+    return sendPhoto(reply, user.photoPath);
   });
+}
+
+/**
+ * Streams a stored upload by its server-assigned filename (`<userId>.<ext>`
+ * — never a client-supplied path). Shared with the operator's admin route.
+ */
+export function sendPhoto(reply: FastifyReply, photoPath: string) {
+  const ext = photoPath.split(".").pop() ?? "";
+  reply.type(EXT_TO_MIME[ext] ?? "application/octet-stream");
+  return reply.send(createReadStream(path.join(UPLOAD_DIR, photoPath)));
+}
+
+/** Removes every stored upload for this user, whatever its extension. */
+export async function deleteStoredPhotos(userId: string): Promise<void> {
+  await Promise.all(Object.values(MIME_TO_EXT).map((ext) => unlink(path.join(UPLOAD_DIR, `${userId}.${ext}`)).catch(() => {})));
 }

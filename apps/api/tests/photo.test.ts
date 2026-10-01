@@ -161,32 +161,57 @@ describe("POST /auth/photo", () => {
   });
 });
 
+// Owner-only since launch readiness (spec §5): the public scene shows the
+// composed scene.jpg, never a raw upload, and the operator fetches a
+// winner's photo through the bearer-token admin route instead.
 describe("GET /photos/:userId", () => {
-  it("returns 404 when the user has no uploaded photo", async () => {
-    const [user] = await db.insert(users).values({ provider: "google", providerId: "g-photo-4", email: "d@example.com", name: "D" }).returning();
+  async function userWithSession(providerId: string) {
+    const [user] = await db.insert(users).values({ provider: "google", providerId, email: `${providerId}@example.com`, name: providerId }).returning();
+    const { token } = await createSession(user.id);
+    return { user, cookie: `oneaboveall_session=${token}` };
+  }
 
+  it("returns 401 with no session, even for a user who has a photo", async () => {
+    const { user } = await userWithSession("g-photo-3");
+    await db.update(users).set({ photoPath: `${user.id}.jpg` }).where(eq(users.id, user.id));
     const app = buildServer();
     const response = await app.inject({ method: "GET", url: `/photos/${user.id}` });
-    expect(response.statusCode).toBe(404);
+    expect(response.statusCode).toBe(401);
   });
 
-  it("returns 404 for an id that doesn't exist at all", async () => {
+  it("returns 404 when the owner has no uploaded photo", async () => {
+    const { user, cookie } = await userWithSession("g-photo-4");
     const app = buildServer();
-    const response = await app.inject({ method: "GET", url: "/photos/00000000-0000-4000-8000-000000000000" });
+    const response = await app.inject({ method: "GET", url: `/photos/${user.id}`, headers: { cookie } });
     expect(response.statusCode).toBe(404);
   });
 
-  it("serves the uploaded photo with the right content type, no session required", async () => {
-    const [user] = await db.insert(users).values({ provider: "google", providerId: "g-photo-5", email: "e@example.com", name: "E" }).returning();
-    const { token } = await createSession(user.id);
+  // 404, not 403: a different signed-in user must not even learn whether
+  // that id has a photo (or exists).
+  it("returns 404 for someone else's photo, indistinguishable from no photo", async () => {
+    const { user: owner } = await userWithSession("g-photo-6");
+    await db.update(users).set({ photoPath: `${owner.id}.jpg` }).where(eq(users.id, owner.id));
+    const { cookie: otherCookie } = await userWithSession("g-photo-7");
+
+    const app = buildServer();
+    const mine = await app.inject({ method: "GET", url: `/photos/${owner.id}`, headers: { cookie: otherCookie } });
+    const nobody = await app.inject({ method: "GET", url: "/photos/00000000-0000-4000-8000-000000000000", headers: { cookie: otherCookie } });
+    expect(mine.statusCode).toBe(404);
+    expect(nobody.statusCode).toBe(404);
+    expect(mine.body).toBe(nobody.body);
+  });
+
+  it("serves the owner their own photo with the right content type, never publicly cacheable", async () => {
+    const { user, cookie } = await userWithSession("g-photo-5");
     const app = buildServer();
 
     const { body, contentType } = buildMultipartBody({ filename: "a.png", contentType: "image/png", content: Buffer.from("png-bytes") });
-    await app.inject({ method: "POST", url: "/auth/photo", headers: { cookie: `oneaboveall_session=${token}`, "content-type": contentType }, payload: body });
+    await app.inject({ method: "POST", url: "/auth/photo", headers: { cookie, "content-type": contentType }, payload: body });
 
-    const response = await app.inject({ method: "GET", url: `/photos/${user.id}` });
+    const response = await app.inject({ method: "GET", url: `/photos/${user.id}`, headers: { cookie } });
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toBe("image/png");
+    expect(response.headers["cache-control"]).toBe("private, no-store");
     expect(response.body).toBe("png-bytes");
 
     await unlink(path.join(UPLOAD_DIR, `${user.id}.png`)).catch(() => {});
