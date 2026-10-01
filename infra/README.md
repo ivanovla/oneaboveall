@@ -117,6 +117,12 @@ API_PUBLIC_URL=https://api.oneaboveall.org
 # skipped (one warning in the api log), nothing else breaks.
 RESEND_API_KEY=re_...
 EMAIL_FROM=oneaboveall <noreply@oneaboveall.org>
+
+# Bearer token for the operator-only /admin API (see "Operator runbook"
+# below). Unset/empty = every /admin route 404s. Generate with
+# `openssl rand -hex 32`; anyone holding it can read bidders' emails and
+# photos, so treat it like the Stripe secret key.
+ADMIN_TOKEN=<long random hex>
 ```
 
 Register `https://api.oneaboveall.org/auth/google/callback` and
@@ -234,6 +240,79 @@ Before setting the key: in Resend, add `oneaboveall.org` as a sending
 domain and add the DNS records it gives you (SPF/DKIM TXT records) at the
 same registrar as the A records above — Resend rejects mail from an
 unverified domain.
+
+## Operator runbook
+
+Operator tooling is a small bearer-token API on the api host
+(`apps/api/src/routes/admin.ts`) — no admin UI. Every call needs
+`Authorization: Bearer $ADMIN_TOKEN`; with `ADMIN_TOKEN` unset in
+`prod.env` the routes don't exist (404). Set up a shell first:
+
+```bash
+export API=https://api.oneaboveall.org
+export ADMIN_TOKEN=...   # same value as in infra/secrets/prod.env
+alias admin='curl -sS -H "Authorization: Bearer $ADMIN_TOKEN"'
+```
+
+**Streamer stats** — visits, sign-ups, distinct bidders, distinct winners
+and captured revenue (cents) per `ref` code, plus totals for everyone
+(attributed or not). Give each streamer their own link,
+`https://oneaboveall.org/?ref=<code>` (letters, digits, `_ . -`, up to 64
+chars; utm_* tags work too). The first link someone arrives through gets
+the credit, permanently.
+
+```bash
+admin "$API/admin/stats" | jq
+```
+
+**Current round** — the champion, the leader and the runner-up (the two
+card holds still alive), each with user id, name, email, amount, whether
+the hold was captured, whether a photo is on file, social link, character
+request and the sponsored flag:
+
+```bash
+admin "$API/admin/round" | jq
+```
+
+**Fetching the winner's photo** (to compose the scene art). Raw photos
+are no longer public — `GET /photos/:id` only serves a user their own.
+After the 4 PM ET close the winner is the `leader` with `"captured": true`;
+once installed (~7 PM ET) they are the `champion`.
+
+```bash
+USER_ID=$(admin "$API/admin/round" | jq -r '.leader.userId')   # or .champion.userId
+admin -o "winner-$USER_ID.jpg" "$API/admin/photos/$USER_ID"
+```
+
+(The file keeps its uploaded format — check with `file winner-*.jpg`;
+JPEG, PNG or WebP.)
+
+**Marking a sponsored creator** — anyone whose seat we paid for or
+arranged must be labelled; it shows as "Sponsored" next to their name on
+the homepage, hover card, leaderboard and overlay:
+
+```bash
+admin -X PATCH -H 'content-type: application/json' \
+  -d '{"sponsored": true}' "$API/admin/users/$USER_ID"
+```
+
+**Moderation** — clear a bad social link and/or photo, or replace an
+offensive display name (any combination in one call). A cleared photo is
+deleted from disk too. The public scene only changes on the next static
+rebuild (next champion install) — if the bad content is already in the
+composed `scene.jpg`, re-render the art too.
+
+```bash
+admin -X PATCH -H 'content-type: application/json' \
+  -d '{"clearSocialUrl": true, "clearPhoto": true, "name": "Seat holder"}' \
+  "$API/admin/users/$USER_ID"
+```
+
+**Stream overlay for streamers** — give them
+`https://oneaboveall.org/overlay?compact=1` as an OBS **Browser Source**,
+400×220 (drop `?compact=1` and use ~400×320 to include the live bid feed).
+It's transparent, polls the public `/current-round` every 5 s, and its
+loads never count as visits.
 
 ## Troubleshooting
 
