@@ -1,4 +1,4 @@
-import { pgTable, text, integer, timestamp, uuid, pgEnum, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, integer, timestamp, uuid, pgEnum, index, uniqueIndex, boolean } from "drizzle-orm/pg-core";
 
 // A round only ever has these two phases: settlement (capturing the
 // winner's hold) runs while the round is still "bidding" — at the daily
@@ -100,6 +100,33 @@ export const users = pgTable("users", {
   // rendered from it) publicly. Null means no upload has ever succeeded, not
   // that consent was withheld — there's nothing to consent to yet.
   photoConsentAt: timestamp("photo_consent_at", { withTimezone: true }),
+  // First-touch marketing attribution — which streamer link (`ref`) and/or
+  // UTM campaign first brought this person to the site, captured by the
+  // browser on landing (apps/web/src/lib/attribution.ts) and handed over
+  // once via PATCH /auth/attribution after sign-in. Write-once: the route
+  // only sets these while attributedAt is null, so a later visit through a
+  // different streamer's link never steals the credit. Every value is
+  // sanitized to ^[A-Za-z0-9_.-]{1,64}$ server-side (anything else is
+  // dropped), so these are safe to echo into Stripe metadata and admin
+  // stats without further escaping.
+  ref: text("ref"),
+  utmSource: text("utm_source"),
+  utmMedium: text("utm_medium"),
+  utmCampaign: text("utm_campaign"),
+  utmContent: text("utm_content"),
+  attributedAt: timestamp("attributed_at", { withTimezone: true }),
+  // Set by the operator (PATCH /admin/users/:id) for a creator we paid or
+  // otherwise arranged to take the seat — rendered publicly as a
+  // "Sponsored" label next to their name wherever they appear (homepage
+  // leader line, hover card, leaderboard, OBS overlay), so a viewer is
+  // never misled into thinking a sponsored bid was an organic one.
+  sponsored: boolean("sponsored").notNull().default(false),
+  // When this user first ticked the "I'm 18+, I agree to the Terms, and I
+  // waive the withdrawal right once I win" box on the bid amount step —
+  // stamped by POST /bids (which refuses to create a hold without that
+  // acceptance) only the first time, so it records when consent was given,
+  // not the latest bid.
+  termsAcceptedAt: timestamp("terms_accepted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   providerIdentityIdx: uniqueIndex("users_provider_provider_id_idx").on(table.provider, table.providerId),
@@ -113,6 +140,19 @@ export const users = pgTable("users", {
 // many distinct people have viewed it".
 export const pageViews = pgTable("page_views", {
   id: integer("id").primaryKey(),
+  count: integer("count").notNull().default(0),
+});
+
+// Visits per streamer referral code: one row per `ref` value, counting how
+// many browser sessions landed on the site through `?ref=<code>` (see POST
+// /ref-visits — the browser posts at most once per session). The ref is the
+// primary key itself — there's no list of "registered" refs anywhere; any
+// code a streamer is handed simply starts existing on its first visit.
+// Sign-ups/bidders/winners per ref are derived from users.ref instead (see
+// engine/queries/admin.ts), so this table only has to answer "how much
+// traffic did that link send".
+export const refVisits = pgTable("ref_visits", {
+  ref: text("ref").primaryKey(),
   count: integer("count").notNull().default(0),
 });
 

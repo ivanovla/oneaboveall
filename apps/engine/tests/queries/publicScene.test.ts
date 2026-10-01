@@ -1,12 +1,13 @@
 import { describe, it, expect, afterEach, afterAll } from "vitest";
 import { db, pool } from "../../src/db/client";
-import { reigns, rounds, users } from "../../src/db/schema";
+import { bids, reigns, rounds, users } from "../../src/db/schema";
 import { getScene, getLeaderboard, getCurrentRoundInfo } from "../../src/queries/publicScene";
 import { createInitialReign } from "../../src/engine/bootstrap";
 import { getLatestRound } from "../../src/db/repository";
 import { nextDailyCloseAt } from "../../src/domain/dailyClose";
 
 afterEach(async () => {
+  await db.delete(bids);
   await db.delete(rounds);
   await db.delete(reigns);
   await db.delete(users);
@@ -195,5 +196,97 @@ describe("getCurrentRoundInfo", () => {
     expect(info?.phase).toBe("bidding");
     expect(info?.currentLeaderCents).toBe(reign.priceCents); // no bids yet — leader is the champion's price
     expect(info?.biddingClosesAt).toEqual(nextDailyCloseAt(startsAt));
+  });
+});
+
+describe("sponsored flag", () => {
+  it("marks a sponsored champion/retinue member on /scene and /leaderboard, false for non-users", async () => {
+    const [sponsoredUser] = await db
+      .insert(users)
+      .values({ provider: "google", providerId: "g-sp-1", email: "sp@example.com", name: "Streamer", sponsored: true })
+      .returning();
+
+    const base = new Date(2026, 0, 1);
+    const day = 24 * 60 * 60 * 1000;
+    await db.insert(reigns).values({ occupantId: "organic-past", priceCents: 100_000, startedAt: base, endedAt: new Date(base.getTime() + day) });
+    await db.insert(reigns).values({ occupantId: sponsoredUser.id, priceCents: 200_000, startedAt: new Date(base.getTime() + day) });
+
+    const scene = await getScene(new Date(base.getTime() + 2 * day));
+    expect(scene.champion?.sponsored).toBe(true);
+    expect(scene.retinue[0].sponsored).toBe(false);
+
+    const board = await getLeaderboard();
+    expect(board.find((r) => r.occupantId === "organic-past")?.sponsored).toBe(false);
+  });
+});
+
+describe("getCurrentRoundInfo — public drama fields", () => {
+  async function setup() {
+    const startsAt = new Date(2026, 0, 1, 0, 0, 0);
+    const [champUser] = await db
+      .insert(users)
+      .values({ provider: "google", providerId: "g-cr-champ", email: "champ@example.com", name: "Reigning Rita", sponsored: true })
+      .returning();
+    const reign = await createInitialReign(champUser.id, startsAt);
+    const round = (await getLatestRound(reign.id))!;
+    return { startsAt, round, champUser };
+  }
+
+  it("reports the champion, no leader and no recent bids for a fresh round", async () => {
+    const { startsAt } = await setup();
+    const info = await getCurrentRoundInfo(new Date(startsAt.getTime() + 1000));
+    expect(info?.champion).toEqual({ name: "Reigning Rita", sponsored: true });
+    expect(info?.leader).toBeNull();
+    expect(info?.recentBids).toEqual([]);
+  });
+
+  it("names the leader and lists the last 5 bids newest first, including released ones, without ids or emails", async () => {
+    const { startsAt, round } = await setup();
+    const [alice] = await db
+      .insert(users)
+      .values({ provider: "google", providerId: "g-cr-a", email: "alice@example.com", name: "Alice" })
+      .returning();
+    const [nameless] = await db
+      .insert(users)
+      .values({ provider: "apple", providerId: "a-cr-b", email: "nameless@example.com", name: "", sponsored: true })
+      .returning();
+
+    const t = (min: number) => new Date(startsAt.getTime() + min * 60_000);
+    // Six bids, alternating bidders; the earlier ones released as they'd be
+    // once outbid past the runner-up slot.
+    const amounts = [110_000, 120_000, 130_000, 140_000, 150_000, 160_000];
+    for (let i = 0; i < amounts.length; i++) {
+      await db.insert(bids).values({
+        roundId: round.id,
+        bidderId: i % 2 === 0 ? alice.id : nameless.id,
+        amountCents: amounts[i],
+        paymentRef: `pi_cr_${i}`,
+        placedAt: t(i + 1),
+        refundedAt: i < 4 ? t(i + 2) : null,
+      });
+    }
+
+    const info = await getCurrentRoundInfo(t(10));
+    expect(info?.currentLeaderCents).toBe(160_000);
+    // Empty name → "Anonymous", never the raw user id.
+    expect(info?.leader).toEqual({ name: "Anonymous", sponsored: true });
+    expect(info?.recentBids.map((b) => b.amountCents)).toEqual([160_000, 150_000, 140_000, 130_000, 120_000]);
+    expect(info?.recentBids[1]).toEqual({ name: "Alice", amountCents: 150_000, placedAt: t(5) });
+
+    const json = JSON.stringify(info);
+    expect(json).not.toContain(alice.id);
+    expect(json).not.toContain(nameless.id);
+    expect(json).not.toContain("@example.com");
+  });
+
+  it("never exposes a nameless champion's UUID", async () => {
+    const startsAt = new Date(2026, 0, 1, 0, 0, 0);
+    const [champUser] = await db
+      .insert(users)
+      .values({ provider: "apple", providerId: "a-cr-anon", email: "anon@example.com", name: "  " })
+      .returning();
+    await createInitialReign(champUser.id, startsAt);
+    const info = await getCurrentRoundInfo(new Date(startsAt.getTime() + 1000));
+    expect(info?.champion).toEqual({ name: "Anonymous", sponsored: false });
   });
 });
