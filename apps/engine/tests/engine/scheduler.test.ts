@@ -160,6 +160,23 @@ describe("tick", () => {
     expect((await getCurrentReign())?.occupantId).toBe("winner");
   });
 
+  it("installs the captured winner on schedule even when releasing another hold keeps failing", async () => {
+    const reign = await createInitialReign("champ", startsAt);
+    const roundId = await currentRoundId(reign.id);
+    await db.insert(bids).values({ roundId, bidderId: "stuck", amountCents: 11_000, paymentRef: "pi_stuck", placedAt: new Date(startsAt.getTime() + 1000) });
+    await db.insert(bids).values({ roundId, bidderId: "winner", amountCents: 12_000, paymentRef: "pi_winner", placedAt: new Date(startsAt.getTime() + 2000) });
+    const provider = new FakePaymentProvider();
+    provider.throwOnRelease.add("pi_stuck");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await tick(justAfterClose, { provider });
+    await tick(afterGap, { provider });
+
+    errorSpy.mockRestore();
+    expect((await getCurrentReign())?.occupantId).toBe("winner");
+    expect((await bidByRef("pi_stuck")).refundedAt).toBeNull();
+  });
+
   it("survives an empty day, chaining into a new round for the same reign", async () => {
     await createInitialReign("champ", startsAt);
 

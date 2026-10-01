@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, afterAll } from "vitest";
+import { describe, it, expect, vi, afterEach, afterAll } from "vitest";
 import { eq } from "drizzle-orm";
 import { db, pool } from "../../src/db/client";
 import { reigns, rounds, bids } from "../../src/db/schema";
@@ -150,6 +150,35 @@ describe("settleRound", () => {
     const result = await settleRound(roundId, closeAt, { provider, notifier }, settleAt);
     expect(result.outcome).toBe("captured");
     expect((await bidByRef("pi_b")).capturedAt).not.toBeNull();
+    expect(notifier.wins).toHaveLength(1);
+  });
+
+  it("once a winner is captured, a release that keeps failing is logged, not thrown — the round still reports captured", async () => {
+    const roundId = await seedRound();
+    await seedBid(roundId, "a", 11_000, "pi_a");
+    await seedBid(roundId, "b", 12_000, "pi_b");
+    await seedBid(roundId, "c", 10_500, "pi_c");
+    const provider = new FakePaymentProvider();
+    // e.g. a legacy charge under dispute whose refund Stripe keeps refusing
+    provider.throwOnRelease.add("pi_a");
+    const notifier = new FakeNotifier();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await settleRound(roundId, closeAt, { provider, notifier }, settleAt);
+
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+    expect(result.outcome).toBe("captured");
+    expect(provider.captures).toEqual(["pi_b"]);
+    // The other release still went through despite pi_a failing first.
+    expect(provider.releases).toEqual(["pi_c"]);
+    expect((await bidByRef("pi_a")).refundedAt).toBeNull();
+    expect(notifier.wins).toHaveLength(1);
+
+    // Next tick retries the stuck release.
+    provider.throwOnRelease.clear();
+    await settleRound(roundId, closeAt, { provider, notifier }, settleAt);
+    expect((await bidByRef("pi_a")).refundedAt).not.toBeNull();
     expect(notifier.wins).toHaveLength(1);
   });
 

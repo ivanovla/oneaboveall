@@ -84,14 +84,35 @@ export async function settleRound(
   // behind, and any bid that (only possible from before late webhooks were
   // rejected) sits after the close. With no winner, that's every hold.
   //
-  // The "won" notification sits in a finally: if a release here fails
-  // transiently, the next tick finds the winner already captured (so
-  // newlyCaptured stays false there) and would otherwise never send it.
+  // Once a winner is captured, one release failing must not hold the round
+  // hostage: a release that keeps throwing (say, the refund of a disputed
+  // legacy charge Stripe won't touch) would otherwise make settleRound throw
+  // on every tick, and the scheduler would never get past it to install the
+  // champion. So with a winner, each failure is logged and the sweep moves
+  // on to the next hold; every tick through the processing gap re-runs this
+  // sweep, which retries whatever is still held. (A hold that is still stuck
+  // once the round is installed lapses on its own when the authorization
+  // expires — it was never captured.) Without a winner there is nothing to
+  // protect, and a failure still throws so the next tick retries before the
+  // round empty-closes.
+  //
+  // The "won" notification still sits in a finally: if anything else in the
+  // sweep throws (a DB error), the next tick finds the winner already
+  // captured (so newlyCaptured stays false there) and would otherwise never
+  // send it.
   const won = winner;
   try {
     for (const bid of await getHeldBids(roundId)) {
       if (bid.id === won?.id) continue;
-      await releaseBid(bid.id, provider, now);
+      if (!won) {
+        await releaseBid(bid.id, provider, now);
+        continue;
+      }
+      try {
+        await releaseBid(bid.id, provider, now);
+      } catch (err) {
+        console.error(`settlement: releasing bid ${bid.id} (${bid.paymentRef}) failed; retrying on the next tick`, err);
+      }
     }
   } finally {
     if (won && newlyCaptured) {
