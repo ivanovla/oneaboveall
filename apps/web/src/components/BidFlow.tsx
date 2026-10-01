@@ -69,6 +69,15 @@ const linkButtonStyle: React.CSSProperties = {
 // Same limit PATCH /auth/name enforces (apps/api/src/routes/authMe.ts).
 const MAX_NAME_LENGTH = 80;
 
+// What a confirmed payment actually means at this point: the card is
+// authorized (a hold), not charged. "Your payment went through" would be
+// wrong twice over — nothing is collected until the bid wins at the close,
+// and a hold whose bid didn't land in time (outbid in a race, or the close
+// passed) is dropped by the server on its own, with nothing for the bidder
+// to do.
+const AUTHORIZED_NOTE =
+  "Your card was authorized, not charged. If your bid didn't land in time, the hold is released automatically.";
+
 function redirectToSignedOut(): void {
   window.location.href = "/";
 }
@@ -103,12 +112,12 @@ function PaymentStep({ apiBaseUrl, roundId, onPaid }: { apiBaseUrl: string; roun
         }
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
-      setError("Checking status is taking longer than expected — try again in a moment.");
+      setError(`Checking status is taking longer than expected — try again in a moment. ${AUTHORIZED_NOTE}`);
     } catch (err) {
       setError(
         err instanceof Error
-          ? `Couldn't check your bid status (${err.message}) — your payment went through; try again in a moment.`
-          : "Couldn't check your bid status — your payment went through; try again in a moment.",
+          ? `Couldn't check your bid status (${err.message}) — try again in a moment. ${AUTHORIZED_NOTE}`
+          : `Couldn't check your bid status — try again in a moment. ${AUTHORIZED_NOTE}`,
       );
     }
     setSubmitting(false);

@@ -108,7 +108,7 @@ describe("POST /webhooks/stripe", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ received: true });
     expect(recordBidMock).toHaveBeenCalledWith(
-      { roundId: "round-1", bidderId: "challenger", amountCents: 11_000, paymentRef: "pi_1", now: expect.any(Date) },
+      { roundId: "round-1", bidderId: "challenger", amountCents: 11_000, paymentRef: "pi_1", now: expect.any(Date), placedAt: expect.any(Date) },
       expect.anything(),
       expect.anything(),
     );
@@ -142,7 +142,34 @@ describe("POST /webhooks/stripe", () => {
 
     expect(response.statusCode).toBe(200);
     expect(recordBidMock).toHaveBeenCalledWith(
-      { roundId: "round-1", bidderId: "challenger", amountCents: 11_000, paymentRef: "pi_hold", now: expect.any(Date) },
+      { roundId: "round-1", bidderId: "challenger", amountCents: 11_000, paymentRef: "pi_hold", now: expect.any(Date), placedAt: expect.any(Date) },
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("passes the Stripe-signed event.created as the bid's placedAt, so a hold authorized just before the close still counts", async () => {
+    const created = 1_767_301_198; // seconds, as Stripe sends it
+    constructEvent.mockReturnValueOnce({
+      type: "payment_intent.amount_capturable_updated",
+      created,
+      data: {
+        object: {
+          id: "pi_hold",
+          status: "requires_capture",
+          amount: 11_000,
+          currency: "usd",
+          metadata: { kind: "bid", roundId: "round-1", bidderId: "challenger", amountCents: "11000" },
+        },
+      },
+    });
+
+    const app = buildServer();
+    const response = await app.inject({ method: "POST", url: "/webhooks/stripe", headers: { "stripe-signature": "valid" }, payload: {} });
+
+    expect(response.statusCode).toBe(200);
+    expect(recordBidMock).toHaveBeenCalledWith(
+      expect.objectContaining({ paymentRef: "pi_hold", placedAt: new Date(created * 1000), now: expect.any(Date) }),
       expect.anything(),
       expect.anything(),
     );

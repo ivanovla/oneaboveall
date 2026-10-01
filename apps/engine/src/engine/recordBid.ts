@@ -17,8 +17,15 @@ import { releaseSupersededHolds } from "./holds";
 //     (the hold already exists by the time we get here, so a rejection means
 //     it has to be dropped, not that nothing happened),
 //   - telling the displaced leader they've been outbid.
+//
+// `placedAt` is when the bid counts as placed — what the daily-close check
+// and the leader tie-break judge it by. The webhook passes the moment Stripe
+// says the hold was secured (the signed event.created), not the moment the
+// webhook happened to be processed: a hold authorized at 15:59:58 whose
+// webhook lands at 16:00:03 was placed in time. `now` is the processing
+// time, used to stamp the releases this call makes. placedAt defaults to now.
 export async function recordBid(
-  params: { roundId: string; bidderId: string; amountCents: number; paymentRef: string; now: Date },
+  params: { roundId: string; bidderId: string; amountCents: number; paymentRef: string; now: Date; placedAt?: Date },
   provider: PaymentProvider,
   notifier: Notifier = noopNotifier,
 ): Promise<{ outcome: "recorded" | "already-recorded" | "released" }> {
@@ -27,7 +34,7 @@ export async function recordBid(
     bidderId: params.bidderId,
     amountCents: params.amountCents,
     paymentRef: params.paymentRef,
-    placedAt: params.now,
+    placedAt: params.placedAt ?? params.now,
   });
 
   if (result.outcome === "already-recorded") {

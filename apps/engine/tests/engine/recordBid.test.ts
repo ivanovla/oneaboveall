@@ -132,6 +132,24 @@ describe("recordBid", () => {
     expect(notifier.outbids).toEqual([]);
   });
 
+  it("judges the close by the bid's placedAt (when the hold was authorized), not by when the webhook was processed", async () => {
+    const startsAt = new Date(2026, 0, 1, 0, 0, 0);
+    const roundId = await seedRound(10_000, "bidding", startsAt);
+    const closeAt = nextDailyCloseAt(startsAt);
+    const provider = new FakePaymentProvider();
+    const authorizedAt = new Date(closeAt.getTime() - 2000);
+    const processedAt = new Date(closeAt.getTime() + 5000);
+
+    const result = await recordBid(
+      { roundId, bidderId: "a", amountCents: 11_000, paymentRef: "pi_a", now: processedAt, placedAt: authorizedAt },
+      provider,
+    );
+
+    expect(result.outcome).toBe("recorded");
+    expect(provider.releases).toEqual([]);
+    expect((await bidByRef("pi_a")).placedAt).toEqual(authorizedAt);
+  });
+
   it("is idempotent — a redelivered webhook neither re-inserts, re-releases, nor re-notifies", async () => {
     const roundId = await seedRound(10_000);
     const provider = new FakePaymentProvider();

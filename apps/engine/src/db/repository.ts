@@ -144,7 +144,9 @@ export async function recordBidAtomic(params: {
           // after the daily close — so without this a webhook that lands
           // after 4pm ET (a slow 3-D Secure confirmation, a Stripe retry)
           // would displace the true winner after the fact. The bid's own
-          // placedAt is the webhook's arrival time (see recordBid.ts).
+          // placedAt is when Stripe secured the hold — the signed event's
+          // timestamp, not the webhook's arrival (see recordBid.ts) — so a
+          // slow delivery of a hold made in time doesn't count against it.
           const placedAt = params.placedAt ?? new Date();
           if (placedAt.getTime() >= nextDailyCloseAt(round.startsAt).getTime()) {
             return { outcome: "rejected" as const, reason: "Bidding for this round has closed." };

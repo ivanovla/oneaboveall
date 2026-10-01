@@ -72,8 +72,21 @@ export function registerStripeWebhookRoute(
         // a safe no-op and needs no separate idempotency bookkeeping here.
         // Any exception is intentionally left to propagate: a 500 is what
         // makes Stripe redeliver, which is what a transient DB failure needs.
+        //
+        // The bid counts as placed when Stripe secured the hold — the event's
+        // `created`, which is covered by the signature verified above, so a
+        // bidder can't backdate it — not when this delivery happened to
+        // arrive: a hold authorized at 15:59:58 whose webhook lands after
+        // 16:00 ET was placed in time. Clamped to now so a skewed clock can
+        // never date a bid into the future. Ordering stays sane: the leader
+        // is still decided by amount first, and placedAt only breaks ties
+        // between equal amounts, where "whose hold was secured first" is the
+        // fair answer anyway.
+        const now = new Date();
+        const placedAt =
+          typeof event.created === "number" ? new Date(Math.min(event.created * 1000, now.getTime())) : now;
         const result = await recordBid(
-          { roundId, bidderId, amountCents, paymentRef: intent.id, now: new Date() },
+          { roundId, bidderId, amountCents, paymentRef: intent.id, now, placedAt },
           provider,
           notifier,
         );

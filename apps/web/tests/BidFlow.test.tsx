@@ -256,6 +256,32 @@ describe("BidFlow — payment then photo", () => {
   });
 });
 
+describe("BidFlow — status check fails after the card is authorized", () => {
+  it("says the card was authorized (not charged) and that a bid that didn't land in time has its hold released automatically", async () => {
+    const base = mockFetch({});
+    // The status endpoint works for the initial load and only fails once
+    // the bid has been submitted — i.e. for the post-payment poll.
+    let bidSubmitted = false;
+    global.fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path === "/bids") bidSubmitted = true;
+      if (bidSubmitted && path.match(/^\/rounds\/.+\/me$/)) throw new Error("network down");
+      return base(url, init);
+    }) as unknown as typeof fetch;
+    render(<BidFlow apiBaseUrl="http://api.test" onDone={vi.fn()} />);
+    await waitFor(() => expect(screen.getByLabelText(/your bid/i)).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText(/your bid/i), { target: { value: "1500" } });
+    acceptTermsAndDisplace();
+    await waitFor(() => expect(screen.getByTestId("payment-element")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText("Confirm payment"));
+
+    await waitFor(() => expect(screen.getByText(/your card was authorized/i)).toBeInTheDocument());
+    expect(screen.getByText(/hold is released automatically/i)).toBeInTheDocument();
+    expect(screen.queryByText(/payment went through/i)).not.toBeInTheDocument();
+  });
+});
+
 describe("BidFlow — photo step", () => {
   async function getToPhotoStep(fetchMock: ReturnType<typeof mockFetch>) {
     global.fetch = fetchMock as unknown as typeof fetch;
