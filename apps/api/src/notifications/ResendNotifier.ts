@@ -81,6 +81,12 @@ export class ResendNotifier implements Notifier {
           : [`We don't have your photo yet — please upload one so we can draw you in: ${this.appUrl}`, ""]),
         "Your art appears on the site around 7 PM ET today.",
         "",
+        // Durable-medium confirmation of the consent given on the bid step
+        // (see terms.astro's withdrawal section): EU consumer law expects the
+        // trader to confirm it after the contract is concluded.
+        "As you agreed when bidding, you asked for the service to start immediately; now that you've won the seat it has been performed, so the right of withdrawal no longer applies. Terms: " +
+          `${this.appUrl}/terms`,
+        "",
         this.appUrl,
       ].join("\n"),
     }));
